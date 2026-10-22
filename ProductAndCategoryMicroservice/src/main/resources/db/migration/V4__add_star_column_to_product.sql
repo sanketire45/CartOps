@@ -1,0 +1,1 @@
+ALTER TABLE product ADD Stars INT DEFAULT 0;

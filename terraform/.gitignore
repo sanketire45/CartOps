@@ -1,0 +1,14 @@
+# Terraform state — NEVER commit (holds real IPs, cluster endpoints, secrets)
+*.tfstate
+*.tfstate.*
+
+# Local provider cache & plans
+.terraform/
+*.tfplan
+crash.log
+
+# Secret variable files (keep the .tf files, ignore any real values)
+*.auto.tfvars
+secrets.tfvars
+
+# NOTE: .terraform.lock.hcl is intentionally NOT ignored — commit it to pin provider versions.

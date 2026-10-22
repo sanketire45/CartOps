@@ -1,0 +1,49 @@
+# ── Personal / AI context ─────────────────────────────────────────────────────
+CLAUDE.md
+TASKS.md
+Data/
+
+# ── macOS ──────────────────────────────────────────────────────────────────────
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# ── IDE — IntelliJ / VS Code ───────────────────────────────────────────────────
+.idea/
+*.iml
+*.iws
+.vscode/
+
+# ── Java / Gradle build output ────────────────────────────────────────────────
+build/
+bin/
+out/
+.gradle/
+*.class
+*.jar
+!gradle/wrapper/gradle-wrapper.jar   # keep the wrapper jar (needed for CI)
+
+# ── Node / frontend ───────────────────────────────────────────────────────────
+node_modules/
+frontend/dist/
+frontend/.env.local
+
+# ── Environment files (keep non-secret ones, exclude anything named .env.prod) ─
+.env.prod
+.env.production
+*.env.secret
+
+# ── Terraform (state + cache — handled by terraform/.gitignore too) ────────────
+terraform/.terraform/
+terraform/*.tfstate
+terraform/*.tfstate.*
+terraform/*.tfplan
+terraform/tfplan.binary
+terraform/tfplan.txt
+*.auto.tfvars
+secrets.tfvars
+
+# ── Misc backup / temp files ──────────────────────────────────────────────────
+*.bak
+*.tmp
+crash.log

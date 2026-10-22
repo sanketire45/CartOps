@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: eureka-server           # fixed name — this is the DNS name apps resolve
+  labels:
+    app: eureka-server
+spec:
+  type: ClusterIP
+  selector:
+    app: eureka-server
+  ports:
+    - port: {{ .Values.eureka.port }}
+      targetPort: {{ .Values.eureka.port }}

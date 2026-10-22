@@ -1,0 +1,42 @@
+{{- if .Values.ingress.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: ecom-ingress
+  annotations:
+    {{- toYaml .Values.ingress.annotations | nindent 4 }}
+spec:
+  ingressClassName: {{ .Values.ingress.className }}
+  rules:
+    - host: {{ .Values.ingress.host }}
+      http:
+        paths:
+          - path: /api/products
+            pathType: Prefix
+            backend:
+              service:
+                name: product-category
+                port:
+                  number: {{ .Values.product.port }}
+          - path: /api/categories
+            pathType: Prefix
+            backend:
+              service:
+                name: product-category
+                port:
+                  number: {{ .Values.product.port }}
+          - path: /api/orders
+            pathType: Prefix
+            backend:
+              service:
+                name: order-service
+                port:
+                  number: {{ .Values.order.port }}
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: frontend
+                port:
+                  number: 80
+{{- end }}

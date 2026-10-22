@@ -1,0 +1,23 @@
+# prod: ECR images + higher replica counts
+# IMAGE_TAG is substituted by Jenkins CI with the git commit SHA (e.g. abc1234)
+# before running: helm upgrade --install ecom ./helm/ecom -f values-prod.yaml
+
+product:
+  image: 656022989575.dkr.ecr.us-east-2.amazonaws.com/ecom-product-category:IMAGE_TAG
+  replicaCount: 4
+
+order:
+  image: 656022989575.dkr.ecr.us-east-2.amazonaws.com/ecom-order-service:IMAGE_TAG
+  replicaCount: 2
+
+eureka:
+  image: 656022989575.dkr.ecr.us-east-2.amazonaws.com/ecom-eureka-server:IMAGE_TAG
+  replicaCount: 1
+
+frontend:
+  image: 656022989575.dkr.ecr.us-east-2.amazonaws.com/ecom-frontend:IMAGE_TAG
+  replicaCount: 2
+
+ingress:
+  enabled: true
+  host: ecom.example.com   # replace with real domain or ALB DNS after apply

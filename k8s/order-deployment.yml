@@ -1,0 +1,60 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata: 
+ name: order-service
+spec: 
+ replicas: 1
+ selector:
+  matchLabels:
+   app: order-service
+ template: 
+  metadata: 
+   labels:
+    app: order-service
+  spec: 
+   initContainers:                     # ← runs BEFORE the app container
+    - name: wait-for-mysql
+      image: busybox:1.36
+      command: ['sh','-c','until nc -z mysql 3306; do echo "waiting for mysql..."; sleep 2; done; echo "mysql is up!"']
+   containers: 
+    - name: order-service
+      image: order-service:v2
+      imagePullPolicy: IfNotPresent
+      ports: 
+       - containerPort: 7878
+      env:
+        - name: PORT
+          value: "7878"
+        - name: SPRING_DATASOURCE_PASSWORD
+          valueFrom:
+            secretKeyRef:
+             name: mysql-secret
+             key: password
+        - name: JAVA_TOOL_OPTIONS          # ← ADD THIS
+          value: "-XX:MaxRAMPercentage=75.0"
+      startupProbe:                          # "done booting yet?" — protects the slow Spring boot
+        httpGet:
+          path: /actuator/health/readiness
+          port: 7878
+        failureThreshold: 30
+        periodSeconds: 5                     # 30×5 = 150s to boot
+      livenessProbe:                         # "alive?" — restart if frozen (NO db check → actuator liveness group)
+        httpGet:
+          path: /actuator/health/liveness
+          port: 7878
+        periodSeconds: 10
+        failureThreshold: 3
+      readinessProbe:                        # "ready?" — pull from traffic if DB down (actuator readiness group)
+        httpGet:
+          path: /actuator/health/readiness
+          port: 7878
+        periodSeconds: 10
+        failureThreshold: 3
+
+      resources:
+        requests:
+          cpu: "250m"
+          memory: "300Mi"     # restore  
+        limits:
+          cpu: "500m"
+          memory: "500Mi"     # restore  # burstable -> request has more room and is lesser than limits

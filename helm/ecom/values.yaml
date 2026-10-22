@@ -1,0 +1,38 @@
+# ===== the whole ecommerce stack, one knob-panel =====
+
+mysqlPassword: "Sanket@123"
+mysql:
+  image: mysql:8.0
+  port: 3306
+  storage: 1Gi
+
+eureka:
+  image: eureka:latest
+  replicaCount: 1
+  port: 8761
+
+product:
+  image: product-category:v99-nope
+  replicaCount: 2
+  port: 8080
+
+order:
+  image: order-service:v2
+  replicaCount: 1
+  port: 7878
+
+frontend:
+  image: ecom-frontend:latest
+  replicaCount: 1
+
+# shared non-secret config (becomes the ConfigMap that product + order read)
+config:
+  FAKESTORE_BASE_URL: "https://fakestoreapi.in/api/"
+  EUREKA_INSTANCE_PREFERIPADDRESS: "true"
+
+ingress:
+  enabled: false
+  className: nginx
+  host: ecom.local
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /

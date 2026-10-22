@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ecom-config
+data:
+  FAKESTORE_BASE_URL: {{ .Values.config.FAKESTORE_BASE_URL | quote }}
+  EUREKA_INSTANCE_PREFERIPADDRESS: {{ .Values.config.EUREKA_INSTANCE_PREFERIPADDRESS | quote }}

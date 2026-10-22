@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: product-category-nodeport
+spec:
+  type: NodePort               # ← the type that opens a node port
+  selector:
+    app: product-category      # routes to your product pods (same label)
+  ports:
+    - port: 8080               # the Service's own port
+      targetPort: 8080         # the pod's containerPort
+      nodePort: 30080          # ← the fixed port opened on EVERY node (30000–32767)

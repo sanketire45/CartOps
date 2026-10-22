@@ -1,0 +1,46 @@
+# =============================================================================
+#  ecom-dev.yaml — ArgoCD Application for the ecom Helm chart (dev env)
+# =============================================================================
+#  This file lives in GitOps/apps/ — root-app.yaml watches this directory.
+#  When you push this file, ArgoCD automatically creates the ecom-dev Application.
+#  No manual kubectl apply needed.
+#
+#  DEPLOY FLOW:
+#    Jenkins CI builds image → pushes to ECR with :abc1234
+#    Jenkins updates values.yaml image tag → commits to Git
+#    ArgoCD detects commit → selfHeal=true → auto-syncs → helm upgrade runs
+#    New pods roll out, old pods terminate → zero-downtime deploy
+# =============================================================================
+
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: ecom-dev
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "2"   # after operators/CRDs (wave 0-1), Phase 3
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+
+  source:
+    repoURL: https://github.com/sanketire45/CartOps.git
+    targetRevision: main
+    path: helm/ecom
+    helm:
+      valueFiles:
+        - values.yaml      # base config (images, ports, config)
+        - values-dev.yaml  # overrides: replicaCount=1, ingress.host=ecom.local
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: ecom   # ArgoCD creates this namespace automatically
+
+  syncPolicy:
+    automated:
+      prune: true       # remove K8s resources deleted from Helm chart
+      selfHeal: true    # re-sync if cluster state drifts from Git
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true   # handles large CRDs without annotation size limit

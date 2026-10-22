@@ -1,0 +1,29 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: mysql-backup
+spec:
+  backoffLimit: 3
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: backup
+          image: mysql:8.0
+          env:
+            - name: MYSQL_PWD
+              valueFrom:
+                secretKeyRef:
+                  name: mysql-secret
+                  key: password
+          command:
+            - sh
+            - -c
+            - 'mysqldump -h mysql -u root --no-tablespaces --databases ecommerce_db order_db > /backup/dump-$(date +%F-%H%M%S).sql && echo "BACKUP DONE:" && ls -lh /backup'
+          volumeMounts:
+            - name: backup
+              mountPath: /backup
+      volumes:
+        - name: backup
+          persistentVolumeClaim:
+            claimName: backup-pvc

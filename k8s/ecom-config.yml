@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: ConfigMap
+metadata: 
+ name: ecom-config
+data:
+ PORT: "8080"
+ FAKESTORE_BASE_URL: "https://fakestoreapi.in/api/"
+ EUREKA_INSTANCE_PREFERIPADDRESS: "true"
+

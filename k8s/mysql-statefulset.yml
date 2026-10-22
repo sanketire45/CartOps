@@ -1,0 +1,62 @@
+apiVersion: apps/v1
+kind: StatefulSet          # ← the controller type (not Deployment)
+metadata:
+  name: mysql
+spec:
+  serviceName: mysql       # ← MUST match the headless Service name
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mysql
+  template:
+    metadata:
+      labels:
+        app: mysql
+    spec:
+      containers:
+        - name: mysql
+          image: mysql:8.0
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: MYSQL_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:            # ← reuse the Secret from Task 3
+                  name: mysql-secret
+                  key: password
+          ports:
+            - containerPort: 3306
+          volumeMounts:
+            - name: data                 # ← links to the volumeClaimTemplate below
+              mountPath: /var/lib/mysql 
+
+          startupProbe:
+            exec:
+              command: ["sh","-c","mysqladmin ping -uroot -p$MYSQL_ROOT_PASSWORD -h 127.0.0.1"]
+            failureThreshold: 30
+            periodSeconds: 5                     # fresh MySQL init can take minutes — big budget
+          livenessProbe:
+            tcpSocket: { port: 3306 }            # "is the DB port open?" — restart if not
+            periodSeconds: 10
+            failureThreshold: 3
+          readinessProbe:
+            exec:
+              command: ["sh","-c","mysqladmin ping -uroot -p$MYSQL_ROOT_PASSWORD -h 127.0.0.1"]
+            periodSeconds: 10
+            failureThreshold: 3
+
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "512Mi"
+            limits:
+              cpu: "250m"       # == request
+              memory: "512Mi"   # == request  → Guaranteed (evicted LAST)
+
+  volumeClaimTemplates:                  # ← StatefulSet-ONLY: a PVC factory
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 1Gi

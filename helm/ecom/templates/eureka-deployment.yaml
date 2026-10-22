@@ -1,0 +1,40 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: eureka-server           # fixed name — apps connect to "eureka-server"
+  labels:
+    app: eureka-server
+spec:
+  replicas: {{ .Values.eureka.replicaCount }}
+  selector:
+    matchLabels:
+      app: eureka-server
+  template:
+    metadata:
+      labels:
+        app: eureka-server
+    spec:
+      containers:
+        - name: eureka-server
+          image: {{ .Values.eureka.image }}
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: {{ .Values.eureka.port }}
+          startupProbe:
+            httpGet:
+              path: /actuator/health
+              port: {{ .Values.eureka.port }}
+            failureThreshold: 30
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /actuator/health
+              port: {{ .Values.eureka.port }}
+            periodSeconds: 10
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /actuator/health
+              port: {{ .Values.eureka.port }}
+            periodSeconds: 10
+            failureThreshold: 3

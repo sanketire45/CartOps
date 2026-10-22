@@ -1,0 +1,44 @@
+# =============================================================================
+#  root-app.yaml — the ONE manifest you apply manually after cluster boot
+# =============================================================================
+#  USAGE (run ONCE after terraform apply + update-kubeconfig):
+#    kubectl apply -f GitOps/root-app.yaml
+#
+#  WHAT HAPPENS:
+#    ArgoCD sees this Application → watches GitOps/apps/ in your Git repo.
+#    Every .yaml file you add to GitOps/apps/ automatically becomes a live
+#    Application — no more manual kubectl apply per service.
+#
+#  APP-OF-APPS PATTERN:
+#    root-app watches GitOps/apps/
+#    GitOps/apps/ecom-dev.yaml    → ArgoCD creates ecom-dev Application
+#    GitOps/apps/eso.yaml         → ArgoCD creates eso Application (Phase 3)
+#    GitOps/apps/kyverno.yaml     → ArgoCD creates kyverno Application (Phase 3)
+#    All automatic. One kubectl apply bootstraps the entire cluster.
+# =============================================================================
+
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: root-app
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io   # clean up child apps on delete
+spec:
+  project: default
+
+  source:
+    repoURL: https://github.com/sanketire45/CartOps.git
+    targetRevision: main
+    path: GitOps/apps   # ArgoCD watches THIS directory for Application manifests
+
+  destination:
+    server: https://kubernetes.default.svc   # the cluster ArgoCD is installed in
+    namespace: argocd
+
+  syncPolicy:
+    automated:
+      prune: true      # delete Applications removed from GitOps/apps/
+      selfHeal: true   # re-sync if manually edited in cluster
+    syncOptions:
+      - CreateNamespace=true

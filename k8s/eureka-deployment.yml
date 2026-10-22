@@ -1,0 +1,42 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+ name: eureka-server
+spec: 
+ replicas: 1
+ selector: 
+  matchLabels: 
+   app: eureka-server
+ template: 
+  metadata:
+   labels: 
+    app: eureka-server
+  spec:
+   containers: 
+    - name: eureka-server
+      image: eureka:latest
+      imagePullPolicy: IfNotPresent
+      ports:
+       - containerPort: 8761
+      startupProbe:
+        httpGet: { path: /, port: 8761 }
+        failureThreshold: 30
+        periodSeconds: 5
+        timeoutSeconds: 5        # the / dashboard is heavy — 1s (default) was too tight
+      livenessProbe:
+        httpGet: { path: /, port: 8761 }
+        periodSeconds: 10
+        timeoutSeconds: 5        # ← was killing a healthy pod on slow renders
+        failureThreshold: 3
+      readinessProbe:
+        httpGet: { path: /, port: 8761 }
+        periodSeconds: 10
+        timeoutSeconds: 5
+        failureThreshold: 3
+      resources:
+        requests:
+          cpu: "100m"
+          memory: "300Mi"
+        limits:
+          cpu: "500m"            # raised from 300m — less throttling while rendering/booting
+          memory: "512Mi"

@@ -1,0 +1,12 @@
+# dev: keep it light on the laptop
+product:
+  replicaCount: 1
+order:
+  replicaCount: 1
+eureka:
+  replicaCount: 1
+frontend:
+  replicaCount: 1
+ingress:
+  enabled: true
+  host: ecom.local

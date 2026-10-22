@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: Pod
+metadata: 
+ name: product-category
+ labels: 
+  app: product-category
+
+spec:
+ containers:
+ - name: product-category
+   image: product-category:v1
+   imagePullPolicy: IfNotPresent
+   env: 
+   - name: PORT
+     value: "8080"
+   ports: 
+    - containerPort: 8000

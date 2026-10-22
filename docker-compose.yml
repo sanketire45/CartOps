@@ -1,0 +1,84 @@
+services:
+  mysql:
+    image: mysql
+    container_name: mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: Sanket@123
+      MYSQL_DATABASE: ecommerce_db
+    volumes:
+      - mysql-data:/var/lib/mysql
+      - ./docker/init:/docker-entrypoint-initdb.d:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-pSanket@123"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      - myNetwork
+
+  product_category_cont:
+    build: ./ProductAndCategoryMicroservice
+    container_name: product_Category_service
+    ports:
+      - "8080:8080"
+    env_file:
+      - ./ProductAndCategoryMicroservice/.env
+    depends_on:
+      mysql:
+        condition: service_healthy
+      eureka_service_cont:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8080 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      -  myNetwork
+
+  order_service_cont:
+    build: ./orderMicroservice
+    container_name: order_service
+    ports:
+      - "7878:7878"
+    env_file:
+      - ./orderMicroservice/.env
+    depends_on:
+      mysql:
+        condition: service_healthy
+      eureka_service_cont:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:7878 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      - myNetwork
+
+  eureka_service_cont:
+    build: ./Servicediscoverywitheureka
+    container_name: eureka-server
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8761/ || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      - myNetwork
+
+networks:
+  myNetwork:
+
+volumes:
+  mysql-data:
+
+

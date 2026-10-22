@@ -1,0 +1,55 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: product-category
+  labels:
+    app: product-category
+spec:
+  replicas: {{ .Values.product.replicaCount }}
+  selector:
+    matchLabels:
+      app: product-category
+  template:
+    metadata:
+      labels:
+        app: product-category
+    spec:
+      initContainers:
+        - name: wait-for-mysql
+          image: busybox:1.36
+          command: ['sh','-c','until nc -z mysql 3306; do echo "waiting for mysql..."; sleep 2; done; echo "mysql is up!"']
+      containers:
+        - name: product-category
+          image: {{ .Values.product.image }}
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: {{ .Values.product.port }}
+          envFrom:                            # pull ALL keys from the ConfigMap
+            - configMapRef:
+                name: ecom-config
+          env:
+            - name: PORT
+              value: "{{ .Values.product.port }}"
+            - name: SPRING_DATASOURCE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: mysql-secret
+                  key: password
+          startupProbe:
+            httpGet:
+              path: /actuator/health/readiness
+              port: {{ .Values.product.port }}
+            failureThreshold: 30
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: {{ .Values.product.port }}
+            periodSeconds: 10
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /actuator/health/readiness
+              port: {{ .Values.product.port }}
+            periodSeconds: 10
+            failureThreshold: 3
