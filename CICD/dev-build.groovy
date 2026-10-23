@@ -151,21 +151,47 @@ pipeline {
             }
         }
 
-        // ── 8. GitOps trigger — update values-prod.yaml with new SHA ──────────
-        // Replaces :IMAGE_TAG placeholder with the real SHA, commits back to Git.
-        // ArgoCD watches the repo — detects this commit → runs helm upgrade → deploys.
-        // This means NO direct kubectl/helm calls from Jenkins. Git IS the trigger.
-        stage("GitOps: Update Image Tag") {
+        // ── 8. Helm lint — validate templates render correctly before pushing ─────
+        // Catches typos or bad template syntax early. Runs offline, no cluster needed.
+        stage("Helm: Lint + Template Check") {
             steps {
                 script {
                     sh """
-                        sed -i 's/:IMAGE_TAG/:${params.IMAGE_TAG}/g' helm/ecom/values-prod.yaml
-                        git config user.email "jenkins@ecom.local"
-                        git config user.name  "Jenkins CI"
-                        git add helm/ecom/values-prod.yaml
-                        git commit -m "ci: bump image tag to ${params.IMAGE_TAG} [skip ci]"
-                        git push origin main
+                        helm lint helm/ecom/ -f helm/ecom/values-prod.yaml --set \
+                            product.image=${env.ECR_REGISTRY}/ecom-product-category:${params.IMAGE_TAG} \
+                            --set order.image=${env.ECR_REGISTRY}/ecom-order-service:${params.IMAGE_TAG} \
+                            --set eureka.image=${env.ECR_REGISTRY}/ecom-eureka-server:${params.IMAGE_TAG} \
+                            --set frontend.image=${env.ECR_REGISTRY}/ecom-frontend:${params.IMAGE_TAG}
+                        helm template ecom helm/ecom/ -f helm/ecom/values-prod.yaml > /dev/null
+                        echo "Helm lint + template render: OK"
                     """
+                }
+            }
+        }
+
+        // ── 9. GitOps trigger — update values-prod.yaml with new SHA ──────────
+        // Replaces whatever :tag is in the file with the new SHA — works on every run,
+        // not just the first one. The naive 's/:IMAGE_TAG/:sha/g' breaks after run #1
+        // because the placeholder is gone. The -E regex below matches any existing tag.
+        // ArgoCD watches the repo — detects this commit → runs helm upgrade → deploys.
+        stage("GitOps: Update Image Tag") {
+            steps {
+                script {
+                    withCredentials([gitUsernamePassword(credentialsId: 'github', gitToolName: 'Default')]) {
+                        sh """
+                            sed -i -E 's|(image: [^:]+:)[^[:space:]]+|\\1${params.IMAGE_TAG}|g' \
+                                helm/ecom/values-prod.yaml
+
+                            echo "--- Updated image tags ---"
+                            grep 'image:' helm/ecom/values-prod.yaml
+
+                            git config user.email "jenkins@ecom.local"
+                            git config user.name  "Jenkins CI"
+                            git add helm/ecom/values-prod.yaml
+                            git commit -m "ci: bump image tag to ${params.IMAGE_TAG} [skip ci]"
+                            git push origin main
+                        """
+                    }
                 }
             }
         }
@@ -175,10 +201,19 @@ pipeline {
     post {
         success {
             archiveArtifacts artifacts: '*.xml', allowEmptyArchive: true
-            echo "✅ Build ${params.IMAGE_TAG} pushed to ECR. ArgoCD will deploy shortly."
+            echo "Build ${params.IMAGE_TAG} pushed to ECR. ArgoCD will deploy shortly."
         }
         failure {
-            echo "❌ Build failed at tag ${params.IMAGE_TAG}. Check stage logs above."
+            emailext(
+                attachLog: true,
+                subject: "CartOps CI FAILED — build #${env.BUILD_NUMBER} tag ${params.IMAGE_TAG}",
+                body: """Build #${env.BUILD_NUMBER} failed.
+Tag     : ${params.IMAGE_TAG}
+Console : ${env.BUILD_URL}
+
+Check the attached log for the failing stage.""",
+                to: 'swapnilyadavfy2526@gmail.com'
+            )
         }
     }
 }
