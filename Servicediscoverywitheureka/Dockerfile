@@ -11,7 +11,7 @@ RUN chmod +x gradlew
 
 COPY src src
 
-RUN --mount=type=cache,target=/root/.gradle ./gradlew bootJar --no-daemon
+RUN --mount=type=cache,id=gradle-eureka,target=/root/.gradle ./gradlew bootJar --no-daemon
 
 # Runtime: JRE only, non-root
 FROM eclipse-temurin:17-jre-alpine
