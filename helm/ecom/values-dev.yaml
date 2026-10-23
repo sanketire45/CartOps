@@ -9,4 +9,4 @@ frontend:
   replicaCount: 1
 ingress:
   enabled: true
-  host: ecom.local
+  host: ""
