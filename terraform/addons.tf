@@ -195,8 +195,33 @@ resource "aws_eks_addon" "efs_csi" {
   depends_on = [aws_eks_node_group.this]
 }
 
+
+# -----------------------------------------------------------------------------
+#  📌 DEFAULT STORAGE CLASS — mark the EKS-built-in gp2 StorageClass as default
+#  so PVCs that don't specify storageClassName get provisioned automatically.
+#
+#  WHY THIS EXISTS:
+#    EKS creates a gp2 StorageClass but does NOT annotate it as default. Any
+#    StatefulSet PVC without an explicit storageClassName stays Pending forever
+#    (Kubernetes can't guess which class to use). This annotation is the missing
+#    piece. EBS CSI migration bridges gp2 (old in-tree provisioner) → CSI driver.
+# -----------------------------------------------------------------------------
+resource "kubernetes_annotations" "gp2_default" {
+  api_version = "storage.k8s.io/v1"
+  kind        = "StorageClass"
+  metadata {
+    name = "gp2"
+  }
+  annotations = {
+    "storageclass.kubernetes.io/is-default-class" = "true"
+  }
+  depends_on = [aws_eks_addon.ebs_csi] # EBS CSI must be active before we rely on gp2
+}
+
+
 # Build order (forced by the references + depends_on above):
 #   cluster → ⚡ vpc-cni → 🚪 nodes → 🔀 kube-proxy / 📞 coredns / 📦 ebs-csi / 📦 efs-csi
+#   → 📌 gp2 default annotation
 #
 # 💡 Later option (not now): add the "eks-pod-identity-agent" add-on to use
 #    EKS Pod Identity (the newer alternative to IRSA) for future workloads.
