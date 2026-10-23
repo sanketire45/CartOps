@@ -10,6 +10,8 @@ import com.example.EcommerceSpring.mapper.ProductMapper;
 import com.example.EcommerceSpring.repository.CategoryRepository;
 import com.example.EcommerceSpring.repository.ProductRepository;
 import org.springframework.stereotype.Service;
+import java.util.List;
+import java.util.stream.Collectors;
 
 @Service
 public class ProductService implements IProductService{
@@ -38,6 +40,13 @@ public class ProductService implements IProductService{
                 .orElseThrow(() -> new CategoryNotFoundException("Category with id " + dto.getCategoryId() + " not found"));
         Product saved =  repo.save(ProductMapper.toEntity(dto, category));
         return ProductMapper.toDto(saved);
+    }
+
+    @Override
+    public List<ProductDTO> getAllProducts() {
+        return repo.findAll().stream()
+                .map(ProductMapper::toDto)
+                .collect(Collectors.toList());
     }
 
     @Override

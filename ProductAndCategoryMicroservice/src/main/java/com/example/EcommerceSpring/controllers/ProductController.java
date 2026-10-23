@@ -4,10 +4,9 @@ import com.example.EcommerceSpring.dto.ProductWithCategoryDTO;
 import com.example.EcommerceSpring.exception.CategoryNotFoundException;
 import com.example.EcommerceSpring.exception.ProductNotFoundException;
 import com.example.EcommerceSpring.services.IProductService;
-import okhttp3.Response;
-import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+import java.util.List;
 
 @RestController //tells spring this class handles web requests
 @RequestMapping("/api/products")
@@ -17,6 +16,11 @@ public class ProductController {
 
     public ProductController(IProductService productService){
         this.productService = productService;
+    }
+
+    @GetMapping
+    public ResponseEntity<List<ProductDTO>> getAllProducts() {
+        return ResponseEntity.ok(productService.getAllProducts());
     }
 
     @GetMapping("/{id}")
