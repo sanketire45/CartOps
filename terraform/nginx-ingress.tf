@@ -46,5 +46,6 @@ resource "helm_release" "ingress_nginx" {
     value = "internet-facing"
   }
 
+  timeout    = 600              # NLB provisioning takes 5-8 min; default 300s is too short
   depends_on = [helm_release.aws_lbc] # the LB controller must exist to build the NLB
 }

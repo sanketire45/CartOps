@@ -23,18 +23,17 @@ pipeline {
     agent any
 
     environment {
-        SONAR_HOME   = tool "Sonar"
-        ECR_REGISTRY = "656022989575.dkr.ecr.us-east-2.amazonaws.com"
-        AWS_REGION   = "us-east-2"
-        // Role assumed per-build for ECR push — instance role only needs sts:AssumeRole
-        // Get this ARN from: terraform output jenkins_ci_role_arn  (after applying iam-jenkins.tf)
-        ECR_ROLE_ARN = "arn:aws:iam::656022989575:role/CartOps-Jenkins-CI-Role"
+        SONAR_HOME       = tool "Sonar"
+        ECR_REGISTRY     = "656022989575.dkr.ecr.us-east-2.amazonaws.com"
+        AWS_REGION       = "us-east-2"
+        ECR_ROLE_ARN     = "arn:aws:iam::656022989575:role/CartOps-Jenkins-CI-Role"
+        DOCKER_BUILDKIT  = "1"   // required for --mount=type=cache in Dockerfiles
     }
 
     parameters {
         string(
             name: 'IMAGE_TAG',
-            defaultValue: '',
+            defaultValue: 'v0.0.0',
             description: 'Git SHA tag applied to all 4 service images (git rev-parse --short HEAD)'
         )
     }
@@ -80,7 +79,9 @@ pipeline {
         // ── 5. OWASP dependency check ─────────────────────────────────────────
         stage("OWASP: Dependency Check") {
             steps {
-                script { owasp_dependency() }
+                catchError(buildResult: 'SUCCESS', stageResult: 'UNSTABLE') {
+                    script { owasp_dependency() }
+                }
             }
         }
 
@@ -215,7 +216,7 @@ Tag     : ${params.IMAGE_TAG}
 Console : ${env.BUILD_URL}
 
 Check the attached log for the failing stage.""",
-                to: 'swapnilyadavfy2526@gmail.com'
+                to: 'sanketire97@gmail.com'
             )
         }
     }

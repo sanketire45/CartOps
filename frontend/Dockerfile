@@ -11,6 +11,9 @@ RUN npm run build
 # Runtime: nginx serving the static build
 FROM nginx:1.27-alpine
 
+# upgrade all packages to get latest security fixes
+RUN apk upgrade --no-cache
+
 # non-root nginx
 RUN addgroup -S appgroup && adduser -S appuser -G appgroup \
     && chown -R appuser:appgroup /var/cache/nginx /var/run /var/log/nginx \

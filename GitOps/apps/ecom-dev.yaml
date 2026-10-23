@@ -30,8 +30,9 @@ spec:
     path: helm/ecom
     helm:
       valueFiles:
-        - values.yaml      # base config (images, ports, config)
-        - values-dev.yaml  # overrides: replicaCount=1, ingress.host=ecom.local
+        - values.yaml      # base config (ports, config, defaults)
+        - values-prod.yaml # ECR image URIs — Jenkins updates this file with each SHA
+        - values-dev.yaml  # dev overrides: replicaCount=1, ingress.host=ecom.local
 
   destination:
     server: https://kubernetes.default.svc
