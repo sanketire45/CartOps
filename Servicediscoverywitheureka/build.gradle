@@ -6,6 +6,8 @@ plugins {
 
 group = 'com.example.EurekaApplication'
 version = '0.0.1-SNAPSHOT'
+
+ext['jackson.version'] = '2.21.4'
 description = 'Project for Eureka service discovery'
 
 java {
