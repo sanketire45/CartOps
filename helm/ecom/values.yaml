@@ -34,5 +34,4 @@ ingress:
   enabled: false
   className: nginx
   host: ecom.local
-  annotations:
-    nginx.ingress.kubernetes.io/rewrite-target: /
+  annotations: {}
