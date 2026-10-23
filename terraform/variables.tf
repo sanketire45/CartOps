@@ -86,3 +86,9 @@ variable "ecr_repos" {
     frontend = "ecom-frontend"
   }
 }
+
+variable "jenkins_instance_role_name" {
+  description = "Name (NOT arn) of the IAM role attached to the Jenkins EC2 instance. Used as the principal that may assume CartOps-Jenkins-CI-Role. Find it: EC2 console → your Jenkins instance → Security → IAM Role."
+  type        = string
+  default     = "CartOps-Jenkins-Instance-Role"
+}

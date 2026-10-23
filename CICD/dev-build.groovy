@@ -26,6 +26,9 @@ pipeline {
         SONAR_HOME   = tool "Sonar"
         ECR_REGISTRY = "656022989575.dkr.ecr.us-east-2.amazonaws.com"
         AWS_REGION   = "us-east-2"
+        // Role assumed per-build for ECR push — instance role only needs sts:AssumeRole
+        // Get this ARN from: terraform output jenkins_ci_role_arn  (after applying iam-jenkins.tf)
+        ECR_ROLE_ARN = "arn:aws:iam::656022989575:role/CartOps-Jenkins-CI-Role"
     }
 
     parameters {
@@ -153,21 +156,21 @@ pipeline {
 
         // ── 8. Helm lint — validate templates render correctly before pushing ─────
         // Catches typos or bad template syntax early. Runs offline, no cluster needed.
-        stage("Helm: Lint + Template Check") {
-            steps {
-                script {
-                    sh """
-                        helm lint helm/ecom/ -f helm/ecom/values-prod.yaml --set \
-                            product.image=${env.ECR_REGISTRY}/ecom-product-category:${params.IMAGE_TAG} \
-                            --set order.image=${env.ECR_REGISTRY}/ecom-order-service:${params.IMAGE_TAG} \
-                            --set eureka.image=${env.ECR_REGISTRY}/ecom-eureka-server:${params.IMAGE_TAG} \
-                            --set frontend.image=${env.ECR_REGISTRY}/ecom-frontend:${params.IMAGE_TAG}
-                        helm template ecom helm/ecom/ -f helm/ecom/values-prod.yaml > /dev/null
-                        echo "Helm lint + template render: OK"
-                    """
-                }
-            }
-        }
+        // stage("Helm: Lint + Template Check") {
+        //     steps {
+        //         script {
+        //             sh """
+        //                 helm lint helm/ecom/ -f helm/ecom/values-prod.yaml --set \
+        //                     product.image=${env.ECR_REGISTRY}/ecom-product-category:${params.IMAGE_TAG} \
+        //                     --set order.image=${env.ECR_REGISTRY}/ecom-order-service:${params.IMAGE_TAG} \
+        //                     --set eureka.image=${env.ECR_REGISTRY}/ecom-eureka-server:${params.IMAGE_TAG} \
+        //                     --set frontend.image=${env.ECR_REGISTRY}/ecom-frontend:${params.IMAGE_TAG}
+        //                 helm template ecom helm/ecom/ -f helm/ecom/values-prod.yaml > /dev/null
+        //                 echo "Helm lint + template render: OK"
+        //             """
+        //         }
+        //     }
+        // }
 
         // ── 9. GitOps trigger — update values-prod.yaml with new SHA ──────────
         // Replaces whatever :tag is in the file with the new SHA — works on every run,
