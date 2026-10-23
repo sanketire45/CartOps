@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { Link } from 'react-router-dom'
 
 const s = {
   h1: { fontSize: 26, fontWeight: 700, marginBottom: 4 },
@@ -23,15 +24,20 @@ const s = {
   grid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: 16 },
   card: {
     background: '#fff', borderRadius: 10, padding: 16,
-    boxShadow: '0 2px 8px rgba(0,0,0,0.08)',
+    boxShadow: '0 2px 8px rgba(0,0,0,0.08)', display: 'flex', flexDirection: 'column', gap: 4,
   },
   idBadge: {
     display: 'inline-block', background: '#1a1a2e', color: '#fff',
-    borderRadius: 4, padding: '2px 8px', fontSize: 12, marginBottom: 6,
+    borderRadius: 4, padding: '2px 8px', fontSize: 12, marginBottom: 2,
   },
-  title: { fontWeight: 600, fontSize: 14, marginBottom: 4 },
+  title: { fontWeight: 600, fontSize: 14 },
   price: { color: '#e94560', fontWeight: 700, fontSize: 18 },
   brand: { color: '#888', fontSize: 12 },
+  detailsLink: {
+    marginTop: 'auto', padding: '7px 0', background: '#1a1a2e', color: '#fff',
+    border: 'none', borderRadius: 6, fontSize: 13, fontWeight: 600,
+    textDecoration: 'none', textAlign: 'center', display: 'block',
+  },
 }
 
 export default function Products() {
@@ -155,6 +161,7 @@ export default function Products() {
               <p style={s.brand}>{p.brand}</p>
               <p style={s.price}>${p.price}</p>
               {p.discount > 0 && <span style={{ fontSize: 12, color: '#27ae60' }}>{p.discount}% off</span>}
+              <Link to={`/products/${p.id}`} style={s.detailsLink}>View Details</Link>
             </div>
           ))}
         </div>

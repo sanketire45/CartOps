@@ -15,8 +15,11 @@ import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.stream.Collectors;
+import com.example.OrderService.dto.OrderHistoryDTO;
+import com.example.OrderService.dto.OrderItemResponseDTO;
+
 @Component
- 
 public class OrderService implements IOrderService{
 
     private final OrderRepository orderRepository;
@@ -55,6 +58,30 @@ public class OrderService implements IOrderService{
        Order CreatedOrder = orderRepository.save(order);
 
        return OrderMapper.toCreateOrderResponseDTO(CreatedOrder);
+    }
 
+    @Override
+    public List<OrderHistoryDTO> getOrdersByUserId(Long userId) {
+        return orderRepository.findByUserId(userId).stream()
+                .map(order -> {
+                    List<OrderItemResponseDTO> items = order.getItems().stream()
+                            .map(item -> OrderItemResponseDTO.builder()
+                                    .productId(item.getProductId())
+                                    .quantity(item.getQuantity())
+                                    .pricePerUnit(item.getPricePerUnit())
+                                    .totalPrice(item.getTotalPrice())
+                                    .build())
+                            .collect(Collectors.toList());
+                    double total = items.stream().mapToDouble(OrderItemResponseDTO::getTotalPrice).sum();
+                    return OrderHistoryDTO.builder()
+                            .orderId(order.getId())
+                            .userId(order.getUserId())
+                            .status(order.getStatus())
+                            .createdAt(order.getCreatedAt())
+                            .items(items)
+                            .totalAmount(total)
+                            .build();
+                })
+                .collect(Collectors.toList());
     }
 }
