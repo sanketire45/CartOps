@@ -19,7 +19,7 @@ public interface ProductRepository extends JpaRepository<Product, Long> {
     //ILIKE
     //writing raw sql query
     //This is native sql query
-    @Query(value = "Select * FROM product WHERE MATCH(name, description) AGAINST(:keyword)", nativeQuery = true)
+    @Query(value = "Select * FROM product WHERE MATCH(title, description) AGAINST(:keyword)", nativeQuery = true)
     List<Product> searchFullText(@Param("keyword") String keyword);
 
     //:minPrce <"minPrice" in @Param("minPrice")

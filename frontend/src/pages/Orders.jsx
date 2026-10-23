@@ -71,6 +71,8 @@ export default function Orders() {
       setMessage(`Order #${data.orderId} created — status: ${data.status}`)
       setProductId('')
       setQuantity('1')
+      setHistoryUserId(userId)
+      fetchHistory(userId)
     } catch (err) {
       setIsSuccess(false)
       setMessage(`Order failed: ${err.message}`)
@@ -79,12 +81,13 @@ export default function Orders() {
     }
   }
 
-  const fetchHistory = async () => {
+  const fetchHistory = async (overrideUserId) => {
+    const uid = overrideUserId ?? historyUserId
     setLoadingHistory(true)
     setHistoryError(null)
     setOrders([])
     try {
-      const res = await fetch(`/api/orders/${historyUserId}`)
+      const res = await fetch(`/api/orders/${uid}`)
       if (!res.ok) throw new Error(res.status)
       const data = await res.json()
       setOrders(data)

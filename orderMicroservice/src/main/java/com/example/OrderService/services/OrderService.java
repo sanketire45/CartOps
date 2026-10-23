@@ -12,6 +12,7 @@ import com.example.OrderService.mapper.OrderItemMapper;
 import com.example.OrderService.mapper.OrderMapper;
 import com.example.OrderService.repository.OrderRepository;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -61,6 +62,7 @@ public class OrderService implements IOrderService{
     }
 
     @Override
+    @Transactional(readOnly = true)
     public List<OrderHistoryDTO> getOrdersByUserId(Long userId) {
         return orderRepository.findByUserId(userId).stream()
                 .map(order -> {

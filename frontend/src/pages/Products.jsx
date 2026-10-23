@@ -51,6 +51,20 @@ export default function Products() {
   const [msg, setMsg] = useState(null)
   const [isSuccess, setIsSuccess] = useState(false)
 
+  const [catName, setCatName] = useState('')
+  const [catSubmitting, setCatSubmitting] = useState(false)
+  const [catMsg, setCatMsg] = useState(null)
+  const [catSuccess, setCatSuccess] = useState(false)
+
+  const loadCategories = () =>
+    fetch('/api/categories')
+      .then(r => r.ok ? r.json() : Promise.reject(r.status))
+      .then(data => {
+        setCategories(data)
+        if (data.length > 0) setForm(f => ({ ...f, categoryId: String(data[0].id) }))
+      })
+      .catch(() => {})
+
   const loadProducts = () => {
     setLoading(true)
     setError(null)
@@ -61,17 +75,35 @@ export default function Products() {
   }
 
   useEffect(() => {
-    fetch('/api/categories')
-      .then(r => r.ok ? r.json() : Promise.reject(r.status))
-      .then(data => {
-        setCategories(data)
-        if (data.length > 0) setForm(f => ({ ...f, categoryId: String(data[0].id) }))
-      })
-      .catch(() => {})
+    loadCategories()
     loadProducts()
   }, [])
 
   const handleChange = e => setForm(f => ({ ...f, [e.target.name]: e.target.value }))
+
+  const handleCreateCategory = async (e) => {
+    e.preventDefault()
+    setCatSubmitting(true)
+    setCatMsg(null)
+    try {
+      const res = await fetch('/api/categories', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: catName }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.message || res.status)
+      setCatSuccess(true)
+      setCatMsg(`Category "${data.name}" created (ID: ${data.id})`)
+      setCatName('')
+      await loadCategories()
+    } catch (err) {
+      setCatSuccess(false)
+      setCatMsg(`Failed: ${err.message}`)
+    } finally {
+      setCatSubmitting(false)
+    }
+  }
 
   const handleCreate = async (e) => {
     e.preventDefault()
@@ -106,7 +138,30 @@ export default function Products() {
   return (
     <div>
       <h1 style={s.h1}>Products</h1>
-      <p style={s.subtitle}>Create products here, then use their ID in the Orders page to place an order.</p>
+      <p style={s.subtitle}>Create categories first, then products, then place orders.</p>
+
+      <div style={{ ...s.section, maxWidth: 400 }}>
+        <p style={s.sectionTitle}>Create Category</p>
+        <form onSubmit={handleCreateCategory}>
+          <div style={s.row}>
+            <div style={{ ...s.field, flex: 1 }}>
+              <label style={s.label}>Category Name</label>
+              <input style={s.input} value={catName} onChange={e => setCatName(e.target.value)} placeholder="e.g. Electronics" required />
+            </div>
+          </div>
+          <button style={s.btn} type="submit" disabled={catSubmitting}>
+            {catSubmitting ? 'Creating…' : 'Create Category'}
+          </button>
+          {catMsg && (
+            <div style={{ ...s.msg, ...(catSuccess ? s.successMsg : s.errorMsg) }}>{catMsg}</div>
+          )}
+        </form>
+        {categories.length > 0 && (
+          <p style={{ marginTop: 12, fontSize: 13, color: '#555' }}>
+            Existing: {categories.map(c => c.name).join(', ')}
+          </p>
+        )}
+      </div>
 
       <div style={s.section}>
         <p style={s.sectionTitle}>Create Product</p>
@@ -132,12 +187,15 @@ export default function Products() {
             </div>
             <div style={s.field}>
               <label style={s.label}>Category</label>
-              <select style={s.select} name="categoryId" value={form.categoryId} onChange={handleChange} required>
-                {categories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-              </select>
+              {categories.length === 0
+                ? <p style={{ color: '#e94560', fontSize: 13, margin: 0 }}>Create a category first ↑</p>
+                : <select style={s.select} name="categoryId" value={form.categoryId} onChange={handleChange} required>
+                    {categories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                  </select>
+              }
             </div>
           </div>
-          <button style={s.btn} type="submit" disabled={submitting}>
+          <button style={{ ...s.btn, opacity: categories.length === 0 ? 0.5 : 1 }} type="submit" disabled={submitting || categories.length === 0}>
             {submitting ? 'Creating…' : 'Create Product'}
           </button>
           {msg && (
