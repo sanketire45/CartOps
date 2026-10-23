@@ -3,8 +3,10 @@ package com.example.EcommerceSpring.services;
 import com.example.EcommerceSpring.dto.ProductDTO;
 import com.example.EcommerceSpring.dto.ProductWithCategoryDTO;
 import com.example.EcommerceSpring.gateway.IProductGateway;
+import org.springframework.context.annotation.Primary;
 import org.springframework.stereotype.Service;
 
+@Primary
 @Service
 public  class FakeStoreProductService implements IProductService{
 
