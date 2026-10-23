@@ -3,19 +3,19 @@
 # before running: helm upgrade --install ecom ./helm/ecom -f values-prod.yaml
 
 product:
-  image: 656022989575.dkr.ecr.us-east-2.amazonaws.com/ecom-product-category:IMAGE_TAG
+  image: 656022989575.dkr.ecr.us-east-2.amazonaws.com/ecom-product-category:v0.0.0
   replicaCount: 4
 
 order:
-  image: 656022989575.dkr.ecr.us-east-2.amazonaws.com/ecom-order-service:IMAGE_TAG
+  image: 656022989575.dkr.ecr.us-east-2.amazonaws.com/ecom-order-service:v0.0.0
   replicaCount: 2
 
 eureka:
-  image: 656022989575.dkr.ecr.us-east-2.amazonaws.com/ecom-eureka-server:IMAGE_TAG
+  image: 656022989575.dkr.ecr.us-east-2.amazonaws.com/ecom-eureka-server:v0.0.0
   replicaCount: 1
 
 frontend:
-  image: 656022989575.dkr.ecr.us-east-2.amazonaws.com/ecom-frontend:IMAGE_TAG
+  image: 656022989575.dkr.ecr.us-east-2.amazonaws.com/ecom-frontend:v0.0.0
   replicaCount: 2
 
 ingress:
