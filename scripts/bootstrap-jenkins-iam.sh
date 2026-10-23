@@ -107,6 +107,7 @@ aws iam create-policy \
         \"Effect\": \"Allow\",
         \"Action\": [
           \"ecr:BatchCheckLayerAvailability\",
+          \"ecr:BatchGetImage\",
           \"ecr:InitiateLayerUpload\",
           \"ecr:UploadLayerPart\",
           \"ecr:CompleteLayerUpload\",
