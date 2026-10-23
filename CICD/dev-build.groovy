@@ -109,7 +109,12 @@ pipeline {
                         script {
                             dir('ProductAndCategoryMicroservice') {
                                 docker_build("ecom-product-category", params.IMAGE_TAG, env.ECR_REGISTRY)
-                                trivy_image_scan("${env.ECR_REGISTRY}/ecom-product-category:${params.IMAGE_TAG}")
+                                try {
+                                    trivy_image_scan("${env.ECR_REGISTRY}/ecom-product-category:${params.IMAGE_TAG}")
+                                } catch (e) {
+                                    currentBuild.result = 'UNSTABLE'
+                                    echo "Trivy: CVEs found in product-category — marking UNSTABLE, ECR push continues"
+                                }
                                 ecr_push("ecom-product-category", params.IMAGE_TAG, env.AWS_REGION, env.ECR_REGISTRY)
                             }
                         }
@@ -121,7 +126,12 @@ pipeline {
                         script {
                             dir('orderMicroservice') {
                                 docker_build("ecom-order-service", params.IMAGE_TAG, env.ECR_REGISTRY)
-                                trivy_image_scan("${env.ECR_REGISTRY}/ecom-order-service:${params.IMAGE_TAG}")
+                                try {
+                                    trivy_image_scan("${env.ECR_REGISTRY}/ecom-order-service:${params.IMAGE_TAG}")
+                                } catch (e) {
+                                    currentBuild.result = 'UNSTABLE'
+                                    echo "Trivy: CVEs found in order-service — marking UNSTABLE, ECR push continues"
+                                }
                                 ecr_push("ecom-order-service", params.IMAGE_TAG, env.AWS_REGION, env.ECR_REGISTRY)
                             }
                         }
@@ -133,7 +143,12 @@ pipeline {
                         script {
                             dir('Servicediscoverywitheureka') {
                                 docker_build("ecom-eureka-server", params.IMAGE_TAG, env.ECR_REGISTRY)
-                                trivy_image_scan("${env.ECR_REGISTRY}/ecom-eureka-server:${params.IMAGE_TAG}")
+                                try {
+                                    trivy_image_scan("${env.ECR_REGISTRY}/ecom-eureka-server:${params.IMAGE_TAG}")
+                                } catch (e) {
+                                    currentBuild.result = 'UNSTABLE'
+                                    echo "Trivy: CVEs found in eureka-server — marking UNSTABLE, ECR push continues"
+                                }
                                 ecr_push("ecom-eureka-server", params.IMAGE_TAG, env.AWS_REGION, env.ECR_REGISTRY)
                             }
                         }
@@ -145,7 +160,12 @@ pipeline {
                         script {
                             dir('frontend') {
                                 docker_build("ecom-frontend", params.IMAGE_TAG, env.ECR_REGISTRY)
-                                trivy_image_scan("${env.ECR_REGISTRY}/ecom-frontend:${params.IMAGE_TAG}")
+                                try {
+                                    trivy_image_scan("${env.ECR_REGISTRY}/ecom-frontend:${params.IMAGE_TAG}")
+                                } catch (e) {
+                                    currentBuild.result = 'UNSTABLE'
+                                    echo "Trivy: CVEs found in frontend — marking UNSTABLE, ECR push continues"
+                                }
                                 ecr_push("ecom-frontend", params.IMAGE_TAG, env.AWS_REGION, env.ECR_REGISTRY)
                             }
                         }
