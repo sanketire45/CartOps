@@ -41,8 +41,8 @@ variable "cluster_version" {
 }
 
 variable "node_instance_type" {
-  description = "Worker node machine size (eksctl --node-type). NOTE: c7i-flex.large = 2 vCPU / 4 GiB (compute-optimized = less RAM). Chosen deliberately to hit OOM under load for learning; bump to t3.large/m7i-flex.large (8 GiB) if monitoring OOMs."
-  default     = "c7i-flex.large"
+  description = "Worker node machine size. t3.medium = 2 vCPU / 4 GiB, general-purpose, burstable — good for dev/learning. Bump to t3.large (8 GiB) when adding monitoring stack (Prometheus+Grafana)."
+  default     = "t3.medium"
 }
 
 variable "node_desired_size" {

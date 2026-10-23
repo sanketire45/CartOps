@@ -6,6 +6,11 @@ metadata:
     app: eureka-server
 spec:
   replicas: {{ .Values.eureka.replicaCount }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
   selector:
     matchLabels:
       app: eureka-server
@@ -14,12 +19,17 @@ spec:
       labels:
         app: eureka-server
     spec:
+      terminationGracePeriodSeconds: 30
       containers:
         - name: eureka-server
           image: {{ .Values.eureka.image }}
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: {{ .Values.eureka.port }}
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sleep", "5"]
           startupProbe:
             httpGet:
               path: /actuator/health
