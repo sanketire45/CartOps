@@ -20,4 +20,4 @@ frontend:
 
 ingress:
   enabled: true
-  host: ecom.example.com   # replace with real domain or ALB DNS after apply
+  host: ""   # empty = match all Host headers (NLB DNS access works without a domain)
