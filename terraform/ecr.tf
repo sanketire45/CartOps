@@ -25,6 +25,7 @@ resource "aws_ecr_repository" "services" {
 
   name                 = each.value
   image_tag_mutability = "IMMUTABLE" # once :abc1234 is pushed, it can NEVER be overwritten
+  force_delete         = true        # allows destroy even when images exist
 
   # todo #14: scan-on-push — every image is scanned for CVEs on arrival.
   # This is the registry-side gate. Trivy in Jenkins CI is the pre-push gate.

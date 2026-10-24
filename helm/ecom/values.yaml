@@ -1,6 +1,6 @@
 # ===== the whole ecommerce stack, one knob-panel =====
 
-mysqlPassword: "Sanket@123"
+# mysqlPassword: "Sanket@123"   # Phase 3 #8: removed — secret lives in AWS Secrets Manager now
 mysql:
   image: mysql:8.0
   port: 3306
