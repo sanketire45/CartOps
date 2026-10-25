@@ -85,7 +85,7 @@ spec:
             any:
               # JMESPath: for each container, check if allowPrivilegeEscalation
               # is not explicitly false. `|| \`true\`` handles the missing-field case.
-              - key: "{{ request.object.spec.containers[].securityContext.allowPrivilegeEscalation || `true` }}"
+              - key: "{{ "{{" }} request.object.spec.containers[].securityContext.allowPrivilegeEscalation || {{ "`" }}true{{ "`" }} {{ "}}" }}"
                 operator: AnyIn
                 value: [true]
 
@@ -129,11 +129,11 @@ spec:
               conditions:
                 any:
                   # image ends in :latest → deny
-                  - key: "{{ element.image }}"
+                  - key: "{{ "{{" }} element.image {{ "}}" }}"
                     operator: Equals
                     value: "*:latest"
                   # image has no tag at all (no colon) → deny
-                  - key: "{{ element.image }}"
+                  - key: "{{ "{{" }} element.image {{ "}}" }}"
                     operator: NotContains
                     value: ":"
 
