@@ -18,6 +18,7 @@ spec:
       securityContext:
         runAsNonRoot: true
         runAsUser: 999                            # mysql user in official mysql image
+        fsGroup: 999                              # chown mounted volumes to gid 999 before container starts
         seccompProfile:
           type: RuntimeDefault
       containers:
