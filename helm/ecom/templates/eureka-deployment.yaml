@@ -20,12 +20,25 @@ spec:
         app: eureka-server
     spec:
       terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: eureka-server
           image: {{ .Values.eureka.image }}
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: {{ .Values.eureka.port }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
           lifecycle:
             preStop:
               exec:
@@ -48,3 +61,6 @@ spec:
               port: {{ .Values.eureka.port }}
             periodSeconds: 10
             failureThreshold: 3
+      volumes:
+        - name: tmp
+          emptyDir: {}

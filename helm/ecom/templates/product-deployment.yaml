@@ -25,12 +25,22 @@ spec:
         - name: wait-for-mysql
           image: busybox:1.36
           command: ['sh','-c','until nc -z mysql 3306; do echo "waiting for mysql..."; sleep 2; done; echo "mysql is up!"']
+      securityContext:                          # Phase 3 #10: pod-level — applies to all containers
+        runAsNonRoot: true
+        runAsUser: 1000
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: product-category
           image: {{ .Values.product.image }}
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: {{ .Values.product.port }}
+          securityContext:                        # container-level — per-container restrictions
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
           lifecycle:
             preStop:
               exec:
@@ -46,6 +56,9 @@ spec:
                 secretKeyRef:
                   name: mysql-secret
                   key: password
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp                     # Spring Boot (Tomcat) writes here at startup
           startupProbe:
             httpGet:
               path: /actuator/health/readiness
@@ -64,3 +77,6 @@ spec:
               port: {{ .Values.product.port }}
             periodSeconds: 10
             failureThreshold: 3
+      volumes:
+        - name: tmp
+          emptyDir: {}                            # in-memory scratch space, destroyed with pod

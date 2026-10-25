@@ -15,10 +15,20 @@ spec:
       labels:
         app: mysql
     spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999                            # mysql user in official mysql image
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: mysql
           image: {{ .Values.mysql.image }}
           imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false         # MySQL writes to /var/lib/mysql — cannot be read-only
+            capabilities:
+              drop: [ALL]
           ports:
             - containerPort: {{ .Values.mysql.port }}
           env:

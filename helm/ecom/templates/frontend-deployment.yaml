@@ -20,12 +20,29 @@ spec:
         app: frontend
     spec:
       terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 101                            # nginx user in official nginx image
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: frontend
           image: {{ .Values.frontend.image }}
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 80
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            - name: nginx-run
+              mountPath: /var/run             # nginx writes pid file here
+            - name: nginx-cache
+              mountPath: /var/cache/nginx     # nginx proxy cache
           lifecycle:
             preStop:
               exec:
@@ -42,3 +59,10 @@ spec:
               port: 80
             periodSeconds: 5
             failureThreshold: 3
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        - name: nginx-run
+          emptyDir: {}
+        - name: nginx-cache
+          emptyDir: {}
