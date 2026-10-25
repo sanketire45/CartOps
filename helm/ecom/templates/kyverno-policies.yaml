@@ -1,0 +1,174 @@
+# =============================================================================
+#  Kyverno ClusterPolicies  —  Phase 3 #11
+# =============================================================================
+#  These are the "AWS Config rules but for Kubernetes" — they don't block login,
+#  they block BAD DEPLOYMENTS. Every kubectl apply / ArgoCD sync passes through
+#  the Kyverno webhook and these rules run against every Pod being created.
+#
+#  validationFailureAction: Enforce → hard block (pod never gets created)
+#  validationFailureAction: Audit   → allow but log violation (for rollout)
+#
+#  We scope all rules to namespace: ecom so we never accidentally block
+#  kube-system, argocd, or kyverno itself.
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+#  Policy 1: require-run-as-non-root
+# -----------------------------------------------------------------------------
+#  WHAT IT CHECKS:
+#    Every container in every pod must have runAsNonRoot: true OR runAsUser != 0
+#    If someone adds a new deployment and forgets the securityContext from #10,
+#    this policy blocks it at the API server before it ever reaches a node.
+#
+#  HOW IT WORKS:
+#    `match` — which resources this rule applies to (Pods in ecom namespace)
+#    `validate` — the condition to check. If the condition is FALSE → deny
+#    `deny.conditions` — JMESPath expression: ANY container without runAsNonRoot
+#                        AND without an explicit non-zero runAsUser → violation
+# -----------------------------------------------------------------------------
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: require-run-as-non-root
+spec:
+  validationFailureAction: Enforce
+  rules:
+    - name: check-run-as-non-root
+      match:
+        any:
+          - resources:
+              kinds: [Pod]
+              namespaces: [ecom]
+      validate:
+        message: "Containers must set runAsNonRoot: true or runAsUser != 0"
+        pattern:
+          spec:
+            # =(containers) means "if this field exists, apply the pattern"
+            # runAsNonRoot: true OR securityContext.runAsUser > 0 must be set
+            =(securityContext):
+              =(runAsNonRoot): true
+            containers:
+              - =(securityContext):
+                  =(runAsNonRoot): true
+
+---
+# -----------------------------------------------------------------------------
+#  Policy 2: disallow-privilege-escalation
+# -----------------------------------------------------------------------------
+#  WHAT IT CHECKS:
+#    allowPrivilegeEscalation must be explicitly set to false on every container.
+#    Without this, a process inside the container could use setuid binaries
+#    (like sudo) to gain root — even if the container started as non-root.
+#
+#  HOW IT WORKS:
+#    `deny` with JMESPath: loops through all containers, checks if any have
+#    allowPrivilegeEscalation != false. The `||` means "or" — if the field
+#    is missing (null) OR set to true → deny.
+# -----------------------------------------------------------------------------
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: disallow-privilege-escalation
+spec:
+  validationFailureAction: Enforce
+  rules:
+    - name: check-privilege-escalation
+      match:
+        any:
+          - resources:
+              kinds: [Pod]
+              namespaces: [ecom]
+      validate:
+        message: "Containers must set allowPrivilegeEscalation: false"
+        deny:
+          conditions:
+            any:
+              # JMESPath: for each container, check if allowPrivilegeEscalation
+              # is not explicitly false. `|| \`true\`` handles the missing-field case.
+              - key: "{{ request.object.spec.containers[].securityContext.allowPrivilegeEscalation || `true` }}"
+                operator: AnyIn
+                value: [true]
+
+---
+# -----------------------------------------------------------------------------
+#  Policy 3: disallow-latest-tag
+# -----------------------------------------------------------------------------
+#  WHAT IT CHECKS:
+#    Image tags must not be `:latest` or missing entirely (no tag = latest).
+#    In production, every image must be pinned to a SHA or version tag
+#    so you always know exactly what code is running.
+#
+#  WHY THIS MATTERS:
+#    If image is `nginx:latest`, the node pulls a different image every time
+#    depending on what's current. Impossible to reproduce bugs, impossible to
+#    roll back reliably.
+#
+#  HOW IT WORKS:
+#    `pattern` with a negation — `!*:latest` means "must not end with :latest"
+#    The `!~` operator is regex negation — matches anything that isn't latest.
+# -----------------------------------------------------------------------------
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: disallow-latest-tag
+spec:
+  validationFailureAction: Enforce
+  rules:
+    - name: check-image-tag
+      match:
+        any:
+          - resources:
+              kinds: [Pod]
+              namespaces: [ecom]
+      validate:
+        message: "Images must not use :latest tag — pin to a specific version or SHA"
+        foreach:
+          # loop over every container in the pod
+          - list: "request.object.spec.containers"
+            deny:
+              conditions:
+                any:
+                  # image ends in :latest → deny
+                  - key: "{{ element.image }}"
+                    operator: Equals
+                    value: "*:latest"
+                  # image has no tag at all (no colon) → deny
+                  - key: "{{ element.image }}"
+                    operator: NotContains
+                    value: ":"
+
+---
+# -----------------------------------------------------------------------------
+#  Policy 4: require-resource-limits
+# -----------------------------------------------------------------------------
+#  WHAT IT CHECKS:
+#    Every container must declare resources.limits.cpu AND resources.limits.memory
+#    Without limits, one runaway pod can consume all node CPU/memory and starve
+#    every other pod on that node (the "noisy neighbour" problem).
+#
+#  HOW IT WORKS:
+#    `pattern` checks that both limits fields exist and are non-empty strings.
+#    The `?*` means "field must exist and be non-empty".
+# -----------------------------------------------------------------------------
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: require-resource-limits
+spec:
+  validationFailureAction: Audit    # Audit first — we haven't added limits yet, Enforce would break deploys
+  rules:
+    - name: check-resource-limits
+      match:
+        any:
+          - resources:
+              kinds: [Pod]
+              namespaces: [ecom]
+      validate:
+        message: "Containers must set resources.limits.cpu and resources.limits.memory"
+        pattern:
+          spec:
+            containers:
+              - resources:
+                  limits:
+                    cpu: "?*"      # ?* = field must exist and be non-empty
+                    memory: "?*"

@@ -43,6 +43,51 @@ resource "helm_release" "argocd" {
 #        The serviceAccount annotation wires IRSA so ESO can call AWS without
 #        any static credentials.
 # =============================================================================
+# =============================================================================
+#  Kyverno  —  Phase 3 #11
+# =============================================================================
+#  🖥️  SAME AS RUNNING BY HAND:
+#        helm repo add kyverno https://kyverno.github.io/kyverno
+#        helm install kyverno kyverno/kyverno -n kyverno --create-namespace
+#
+#  📖  WHAT IT DOES, SIMPLY:
+#        Installs the Kyverno admission webhook. After this, every kubectl apply
+#        / ArgoCD sync / Helm upgrade is intercepted by Kyverno before the
+#        resource is written to etcd. If it violates a ClusterPolicy → blocked.
+#
+#        replicas=1: production uses 3 for HA. One is fine for dev/learning.
+# =============================================================================
+resource "helm_release" "kyverno" {
+  name             = "kyverno"
+  repository       = "https://kyverno.github.io/kyverno"
+  chart            = "kyverno"
+  namespace        = "kyverno"
+  create_namespace = true
+  version          = "3.3.7"
+
+  set {
+    name  = "admissionController.replicas"
+    value = "1"   # dev: 1 replica is enough; prod: 3 for HA
+  }
+
+  depends_on = [aws_eks_node_group.this]
+}
+
+# =============================================================================
+#  External Secrets Operator  —  Phase 3 #8
+# =============================================================================
+#  🖥️  SAME AS RUNNING BY HAND:
+#        helm repo add external-secrets https://charts.external-secrets.io
+#        helm install external-secrets external-secrets/external-secrets \
+#          -n external-secrets --create-namespace \
+#          --set serviceAccount.annotations."eks\.amazonaws\.com/role-arn"=<role-arn>
+#
+#  📖  WHAT IT DOES, SIMPLY:
+#        Installs the ESO controller. It watches for ExternalSecret CRs in any
+#        namespace and syncs them from AWS Secrets Manager into real K8s Secrets.
+#        The serviceAccount annotation wires IRSA so ESO can call AWS without
+#        any static credentials.
+# =============================================================================
 resource "helm_release" "external_secrets" {
   name             = "external-secrets"
   repository       = "https://charts.external-secrets.io"
