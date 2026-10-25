@@ -7,7 +7,7 @@
 #
 #  DEPLOY FLOW:
 #    Jenkins CI builds image → pushes to ECR with :abc1234
-#    Jenkins updates values.yaml image tag → commits to Git
+#    Jenkins updates values-dev.yaml image tag → commits to Git
 #    ArgoCD detects commit → selfHeal=true → auto-syncs → helm upgrade runs
 #    New pods roll out, old pods terminate → zero-downtime deploy
 # =============================================================================
@@ -30,9 +30,8 @@ spec:
     path: helm/ecom
     helm:
       valueFiles:
-        - values.yaml      # base config (ports, config, defaults)
-        - values-prod.yaml # ECR image URIs — Jenkins updates this file with each SHA
-        - values-dev.yaml  # dev overrides: replicaCount=1, ingress.host=ecom.local
+        - values.yaml     # base config (ports, mysql, eureka defaults)
+        - values-dev.yaml # ECR images + replicas + IRSA ARNs — Jenkins writes here
 
   destination:
     server: https://kubernetes.default.svc
