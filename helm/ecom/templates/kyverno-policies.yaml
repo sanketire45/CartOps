@@ -132,10 +132,10 @@ spec:
                   - key: "{{ "{{" }} element.image {{ "}}" }}"
                     operator: Equals
                     value: "*:latest"
-                  # image has no tag at all (no colon) → deny
+                  # image has no tag at all (no colon separator) → deny
                   - key: "{{ "{{" }} element.image {{ "}}" }}"
-                    operator: NotContains
-                    value: ":"
+                    operator: NotEquals
+                    value: "*:*"
 
 ---
 # -----------------------------------------------------------------------------
