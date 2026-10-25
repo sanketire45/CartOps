@@ -10,3 +10,8 @@ frontend:
 ingress:
   enabled: true
   host: ""
+
+# Phase 3 #9: dev IRSA role ARNs (prod account would have different ARNs in values-prod.yaml)
+irsa:
+  productRoleArn: "arn:aws:iam::656022989575:role/ecom-product-irsa"
+  orderRoleArn:   "arn:aws:iam::656022989575:role/ecom-order-irsa"
