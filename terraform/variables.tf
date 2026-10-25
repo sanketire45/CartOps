@@ -47,7 +47,7 @@ variable "node_instance_type" {
 
 variable "node_desired_size" {
   description = "How many worker nodes to start with (eksctl --nodes)"
-  default     = 2
+  default     = 3
 }
 
 variable "node_min_size" {
@@ -57,7 +57,7 @@ variable "node_min_size" {
 
 variable "node_max_size" {
   description = "Most worker nodes the group may scale to (eksctl --nodes-max)"
-  default     = 2
+  default     = 3
 }
 
 variable "node_volume_size" {

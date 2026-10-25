@@ -69,6 +69,8 @@ resource "aws_eks_addon" "vpc_cni" {
   # "true" tells the CNI agent to read NetworkPolicy objects and enforce them.
   configuration_values = jsonencode({
     enableNetworkPolicy = "true"
+    # ENABLE_PREFIX_DELEGATION reverted — needs launch template --max-pods=110 override
+    # to actually increase pod count beyond 17. Will be done properly in task #26a.
   })
 
   # if a setting already exists, the managed add-on wins (upgrade-safe)
