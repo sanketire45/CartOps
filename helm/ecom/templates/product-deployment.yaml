@@ -19,6 +19,7 @@ spec:
       labels:
         app: product-category
     spec:
+      serviceAccountName: product-category-sa   # Phase 3 #9: IRSA — gives this pod AWS identity
       terminationGracePeriodSeconds: 30
       initContainers:
         - name: wait-for-mysql

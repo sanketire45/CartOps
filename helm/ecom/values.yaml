@@ -25,6 +25,11 @@ frontend:
   image: ecom-frontend:latest
   replicaCount: 1
 
+# Phase 3 #9: IRSA role ARNs — run `terraform output` after apply and paste here
+irsa:
+  productRoleArn: "arn:aws:iam::656022989575:role/ecom-product-irsa"
+  orderRoleArn:   "arn:aws:iam::656022989575:role/ecom-order-irsa"
+
 # shared non-secret config (becomes the ConfigMap that product + order read)
 config:
   FAKESTORE_BASE_URL: "https://fakestoreapi.in/api/"
