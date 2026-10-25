@@ -60,7 +60,7 @@ data "aws_iam_policy_document" "product_permissions" {
   statement {
     effect    = "Allow"
     actions   = ["kms:Decrypt"]
-    resources = [aws_kms_key.secrets.arn]
+    resources = [data.aws_kms_key.master.arn]
   }
 }
 

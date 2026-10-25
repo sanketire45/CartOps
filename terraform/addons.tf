@@ -64,6 +64,13 @@ resource "aws_eks_addon" "vpc_cni" {
   addon_name    = "vpc-cni"
   addon_version = data.aws_eks_addon_version.vpc_cni.version
 
+  # Phase 3 #12: without this flag, NetworkPolicy objects are silently IGNORED
+  # by the VPC CNI — every kubectl apply succeeds but traffic rules do nothing.
+  # "true" tells the CNI agent to read NetworkPolicy objects and enforce them.
+  configuration_values = jsonencode({
+    enableNetworkPolicy = "true"
+  })
+
   # if a setting already exists, the managed add-on wins (upgrade-safe)
   resolve_conflicts_on_create = "OVERWRITE"
   resolve_conflicts_on_update = "OVERWRITE"

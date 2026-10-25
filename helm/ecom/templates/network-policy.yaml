@@ -1,0 +1,234 @@
+# =============================================================================
+#  network-policy.yaml  —  Phase 3 #12: micro-segmentation for the ecom stack
+# =============================================================================
+#  WHAT THIS DOES:
+#    By default, every pod in the cluster can talk to every other pod —
+#    if a hacker gets into the frontend, they can directly hit MySQL.
+#    NetworkPolicy adds firewall rules INSIDE the cluster: each pod only
+#    accepts traffic from the specific pods that need to talk to it.
+#
+#  HOW ENFORCEMENT WORKS:
+#    NetworkPolicy is enforced by the CNI plugin (AWS VPC CNI here).
+#    The VPC CNI must have `enableNetworkPolicy: "true"` set in addons.tf —
+#    without that flag, Kubernetes accepts these YAML files but does NOTHING.
+#
+#  POLICY APPROACH — default-deny, then allow-list:
+#    Step 1: One policy with podSelector: {} blocks ALL ingress to all pods.
+#    Step 2: Individual policies punch specific holes for legitimate traffic.
+#    Result: only the exact flows listed below are allowed; everything else dropped.
+#
+#  TRAFFIC MAP (what each policy allows):
+#    internet → ingress-nginx → frontend:80
+#    frontend → product:8080
+#    frontend → order:7878
+#    product  → mysql:3306
+#    order    → mysql:3306
+#    any pod  → eureka:8761  (service discovery, all pods need to register)
+# =============================================================================
+
+
+# -----------------------------------------------------------------------------
+#  Policy 1: default-deny ALL ingress
+# -----------------------------------------------------------------------------
+#  WHAT:
+#    An empty podSelector ({}) matches EVERY pod in the ecom namespace.
+#    policyTypes: [Ingress] with NO ingress rules = block all inbound traffic.
+#
+#  WHY THIS MUST COME FIRST:
+#    Without it, all the allow-list policies below do nothing — because
+#    Kubernetes NetworkPolicy is additive (ORed together). If no policy
+#    selects a pod, ALL traffic is allowed. Only when at least one policy
+#    selects the pod does Kubernetes switch to deny-by-default for that pod.
+#
+#  SYNTAX:
+#    podSelector: {}   = empty selector = match ALL pods
+#    ingress: (absent) = no ingress rules = deny all inbound
+# -----------------------------------------------------------------------------
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-ingress
+  namespace: {{ .Release.Namespace }}
+spec:
+  podSelector: {}        # matches every pod in the namespace
+  policyTypes:
+    - Ingress            # only restricting inbound; egress stays open
+
+
+---
+# -----------------------------------------------------------------------------
+#  Policy 2: allow ingress-nginx → frontend:80
+# -----------------------------------------------------------------------------
+#  WHAT:
+#    The ingress-nginx controller (in a separate namespace) forwards HTTP
+#    requests from the internet to the frontend pod. This rule allows that.
+#
+#  HOW namespaceSelector WORKS:
+#    We can't use podSelector across namespaces — NetworkPolicy can only select
+#    pods in the SAME namespace by podSelector. For cross-namespace traffic,
+#    namespaceSelector matches on namespace LABELS.
+#    The ingress-nginx namespace has the label:
+#      kubernetes.io/metadata.name: ingress-nginx
+#    (EKS auto-labels every namespace with its own name as metadata.name.)
+#
+#  SYNTAX:
+#    from: [{namespaceSelector}] = allow from any pod in that namespace
+#    ports: [{port: 80}]         = only on port 80
+# -----------------------------------------------------------------------------
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-ingress-to-frontend
+  namespace: {{ .Release.Namespace }}
+spec:
+  podSelector:
+    matchLabels:
+      app: frontend
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx
+      ports:
+        - port: 80
+
+
+---
+# -----------------------------------------------------------------------------
+#  Policy 3: allow product + order → mysql:3306
+# -----------------------------------------------------------------------------
+#  WHAT:
+#    MySQL should ONLY accept connections from the product-category and
+#    order-service pods — not from frontend, not from eureka, not from
+#    anything else. If mysql is breached through one of these services,
+#    the attacker still can't pivot to mysql from, say, the frontend.
+#
+#  WHY TWO ENTRIES IN from[]:
+#    NetworkPolicy `from` is an OR list. Either product-category OR
+#    order-service can connect to mysql — not both at the same time
+#    (each has its own connection pool).
+#
+#  PORT:
+#    {{ .Values.mysql.port }} resolves to 3306 from values.yaml.
+#    Never hardcode 3306 — if values.yaml changes, the policy follows.
+# -----------------------------------------------------------------------------
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-services-to-mysql
+  namespace: {{ .Release.Namespace }}
+spec:
+  podSelector:
+    matchLabels:
+      app: mysql
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: product-category
+        - podSelector:
+            matchLabels:
+              app: order-service
+      ports:
+        - port: {{ .Values.mysql.port }}
+
+
+---
+# -----------------------------------------------------------------------------
+#  Policy 4: allow all pods → eureka:8761
+# -----------------------------------------------------------------------------
+#  WHAT:
+#    Eureka is the service-discovery hub. Every microservice needs to:
+#      1. Register itself on startup  (POST /eureka/apps/<name>)
+#      2. Heartbeat every 30s         (PUT  /eureka/apps/<name>/<id>)
+#      3. Fetch the registry          (GET  /eureka/apps)
+#    So every pod in the namespace must be able to reach eureka.
+#
+#  SYNTAX:
+#    from: [{podSelector: {}}] = empty selector = allow from ALL pods
+#    This is different from the default-deny policy above — an empty
+#    podSelector in `from` means "any pod in the same namespace".
+# -----------------------------------------------------------------------------
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-all-to-eureka
+  namespace: {{ .Release.Namespace }}
+spec:
+  podSelector:
+    matchLabels:
+      app: eureka
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector: {}    # any pod in this namespace
+      ports:
+        - port: {{ .Values.eureka.port }}
+
+
+---
+# -----------------------------------------------------------------------------
+#  Policy 5a: allow frontend → product-category:8080
+# -----------------------------------------------------------------------------
+#  WHAT:
+#    The React frontend calls the product-category REST API to list products
+#    and categories. Only the frontend pod should be able to reach product —
+#    not order-service, not mysql, not anything else.
+# -----------------------------------------------------------------------------
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-frontend-to-product
+  namespace: {{ .Release.Namespace }}
+spec:
+  podSelector:
+    matchLabels:
+      app: product-category
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: frontend
+      ports:
+        - port: {{ .Values.product.port }}
+
+
+---
+# -----------------------------------------------------------------------------
+#  Policy 5b: allow frontend → order-service:7878
+# -----------------------------------------------------------------------------
+#  WHAT:
+#    The React frontend calls order-service to place and track orders.
+#    Same pattern as 5a — only frontend can call it.
+#
+#  NOTE on port 7878:
+#    This is NOT the standard 8080/8081. It comes from values.yaml
+#    (order.port: 7878), which matches the Spring Boot server.port in
+#    order-service's application.properties. Using {{ .Values.order.port }}
+#    keeps the policy and the app config in sync automatically.
+# -----------------------------------------------------------------------------
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-frontend-to-order
+  namespace: {{ .Release.Namespace }}
+spec:
+  podSelector:
+    matchLabels:
+      app: order-service
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: frontend
+      ports:
+        - port: {{ .Values.order.port }}

@@ -12,21 +12,12 @@
 #    3. Pods read from that K8s Secret — unchanged from before
 # =============================================================================
 
-# ── KMS key — encrypts the secret at rest ────────────────────────────────────
-# Without this, Secrets Manager uses the default AWS-managed key.
-# Using a customer-managed key (CMK) lets you: audit who used it in CloudTrail,
-# revoke access by disabling the key, and rotate it on your schedule.
-resource "aws_kms_key" "secrets" {
-  description             = "KMS key for ecom Secrets Manager secrets"
-  deletion_window_in_days = 7   # minimum; gives you a week to cancel accidental deletion
-  enable_key_rotation     = true
-
-  tags = { Purpose = "secrets-encryption" }
-}
-
-resource "aws_kms_alias" "secrets" {
-  name          = "alias/ecom-secrets"
-  target_key_id = aws_kms_key.secrets.key_id
+# ── KMS key — lookup only, NOT managed by Terraform ─────────────────────────
+# Created once by scripts/create-kms-key.sh (alias/ecom-master).
+# Kept outside Terraform because KMS has a 7-day minimum deletion window —
+# managing it here would cause key accumulation on daily apply/destroy cycles.
+data "aws_kms_key" "master" {
+  key_id = "alias/ecom-master"
 }
 
 # ── The secret itself ─────────────────────────────────────────────────────────
@@ -34,11 +25,12 @@ resource "aws_kms_alias" "secrets" {
 # The value is set via aws_secretsmanager_secret_version below.
 resource "aws_secretsmanager_secret" "mysql_password" {
   name       = "ecom/mysql-password"
-  kms_key_id = aws_kms_key.secrets.key_id
+  kms_key_id = data.aws_kms_key.master.key_id
 
-  # prevent accidental deletion — must explicitly pass --force-delete-without-recovery
-  # to delete this secret. Safe default for production.
-  recovery_window_in_days = 7
+  # 0 = force-delete immediately on terraform destroy (no recovery window).
+  # Dev-only pattern: lets apply/destroy cycle daily without hitting the
+  # "secret already scheduled for deletion" error. Use 7–30 in prod.
+  recovery_window_in_days = 0
 
   tags = { Service = "mysql" }
 }
@@ -101,7 +93,7 @@ data "aws_iam_policy_document" "eso_secrets" {
   statement {
     effect    = "Allow"
     actions   = ["kms:Decrypt"]
-    resources = [aws_kms_key.secrets.arn]
+    resources = [data.aws_kms_key.master.arn]
   }
 }
 
