@@ -181,19 +181,19 @@ pipeline {
         //     steps {
         //         script {
         //             sh """
-        //                 helm lint helm/ecom/ -f helm/ecom/values-prod.yaml --set \
+        //                 helm lint helm/ecom/ -f helm/ecom/values-dev.yaml --set \
         //                     product.image=${env.ECR_REGISTRY}/ecom-product-category:${params.IMAGE_TAG} \
         //                     --set order.image=${env.ECR_REGISTRY}/ecom-order-service:${params.IMAGE_TAG} \
         //                     --set eureka.image=${env.ECR_REGISTRY}/ecom-eureka-server:${params.IMAGE_TAG} \
         //                     --set frontend.image=${env.ECR_REGISTRY}/ecom-frontend:${params.IMAGE_TAG}
-        //                 helm template ecom helm/ecom/ -f helm/ecom/values-prod.yaml > /dev/null
+        //                 helm template ecom helm/ecom/ -f helm/ecom/values-dev.yaml > /dev/null
         //                 echo "Helm lint + template render: OK"
         //             """
         //         }
         //     }
         // }
 
-        // ── 9. GitOps trigger — update values-prod.yaml with new SHA ──────────
+        // ── 9. GitOps trigger — update values-dev.yaml with new SHA ───────────
         // Replaces whatever :tag is in the file with the new SHA — works on every run,
         // not just the first one. The naive 's/:IMAGE_TAG/:sha/g' breaks after run #1
         // because the placeholder is gone. The -E regex below matches any existing tag.
@@ -204,14 +204,14 @@ pipeline {
                     withCredentials([gitUsernamePassword(credentialsId: 'github', gitToolName: 'Default')]) {
                         sh """
                             sed -i -E 's|(image: [^:]+:)[^[:space:]]+|\\1${params.IMAGE_TAG}|g' \
-                                helm/ecom/values-prod.yaml
+                                helm/ecom/values-dev.yaml
 
                             echo "--- Updated image tags ---"
-                            grep 'image:' helm/ecom/values-prod.yaml
+                            grep 'image:' helm/ecom/values-dev.yaml
 
                             git config user.email "jenkins@ecom.local"
                             git config user.name  "Jenkins CI"
-                            git add helm/ecom/values-prod.yaml
+                            git add helm/ecom/values-dev.yaml
                             git commit -m "ci: bump image tag to ${params.IMAGE_TAG} [skip ci]"
                             git push origin main
                         """

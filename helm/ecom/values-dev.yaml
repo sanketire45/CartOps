@@ -1,17 +1,25 @@
-# dev: keep it light on the laptop
+# dev environment overrides — Jenkins updates image tags here after every build
 product:
+  image: 656022989575.dkr.ecr.us-east-2.amazonaws.com/ecom-product-category:v0.0.0
   replicaCount: 1
+
 order:
+  image: 656022989575.dkr.ecr.us-east-2.amazonaws.com/ecom-order-service:v0.0.0
   replicaCount: 1
+
 eureka:
+  image: 656022989575.dkr.ecr.us-east-2.amazonaws.com/ecom-eureka-server:v0.0.0
   replicaCount: 1
+
 frontend:
+  image: 656022989575.dkr.ecr.us-east-2.amazonaws.com/ecom-frontend:v0.0.0
   replicaCount: 1
+
 ingress:
   enabled: true
   host: ""
 
-# Phase 3 #9: dev IRSA role ARNs (prod account would have different ARNs in values-prod.yaml)
+# Phase 3 #9: IRSA role ARNs (env-specific — prod account would have different ARNs)
 irsa:
   productRoleArn: "arn:aws:iam::656022989575:role/ecom-product-irsa"
   orderRoleArn:   "arn:aws:iam::656022989575:role/ecom-order-irsa"

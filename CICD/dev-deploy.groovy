@@ -14,7 +14,7 @@
 //
 //  HOW IT WORKS:
 //    1. Takes an IMAGE_TAG (git SHA, e.g. abc1234)
-//    2. Updates helm/ecom/values-prod.yaml with that exact tag for all 4 services
+//    2. Updates helm/ecom/values-dev.yaml with that exact tag for all 4 services
 //    3. Commits + pushes to main → ArgoCD detects → helm upgrade runs
 //
 //  ROLLBACK EXAMPLE:
@@ -54,7 +54,7 @@ pipeline {
                     }
                     echo "Action  : ${params.ACTION}"
                     echo "Tag     : ${params.IMAGE_TAG}"
-                    echo "This will update all 4 service images in helm/ecom/values-prod.yaml"
+                    echo "This will update all 4 service images in helm/ecom/values-dev.yaml"
                 }
             }
         }
@@ -113,7 +113,7 @@ pipeline {
             }
         }
 
-        // ── 5. Update values-prod.yaml with the target tag ────────────────────
+        // ── 5. Update values-dev.yaml with the target tag ─────────────────────
         // Replaces whatever tag is currently in the file with the target tag.
         // Works for both forward promotion and rollback — same operation.
         stage("GitOps: Update Image Tag") {
@@ -123,10 +123,10 @@ pipeline {
                         # Replace any existing :<sha> tag in the ECR image lines
                         # Pattern matches: <account>.dkr.ecr.<region>.amazonaws.com/<repo>:<anything>
                         sed -i -E 's|(image: [^:]+:)[^[:space:]]+|\\1${params.IMAGE_TAG}|g' \
-                            helm/ecom/values-prod.yaml
+                            helm/ecom/values-dev.yaml
 
-                        echo "--- Updated values-prod.yaml ---"
-                        grep 'image:' helm/ecom/values-prod.yaml
+                        echo "--- Updated values-dev.yaml ---"
+                        grep 'image:' helm/ecom/values-dev.yaml
                     """
                 }
             }
@@ -140,7 +140,7 @@ pipeline {
                         sh """
                             git config user.email "jenkins@ecom.local"
                             git config user.name  "Jenkins CD"
-                            git add helm/ecom/values-prod.yaml
+                            git add helm/ecom/values-dev.yaml
                             git commit -m "cd: ${params.ACTION} image tag ${params.IMAGE_TAG} [skip ci]"
                             git push ${env.REPO_URL} main
                         """
