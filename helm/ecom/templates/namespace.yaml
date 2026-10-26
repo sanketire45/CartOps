@@ -1,0 +1,26 @@
+# =============================================================================
+#  namespace.yaml  —  Phase 3 #13: Pod Security Admission (PSA)
+# =============================================================================
+#  PSA is built into the K8s API server — no extra controller needed.
+#  It reads these labels on the namespace and enforces them on EVERY pod
+#  creation, regardless of who triggered it (kubectl, ArgoCD, Helm, controllers).
+#
+#  Three modes on the same label key:
+#    enforce → pod is REJECTED if it violates the profile
+#    warn    → pod is allowed but kubectl prints a warning at apply time
+#    audit   → pod is allowed but violation is written to the audit log
+#
+#  We use `restricted` (the strictest profile) because task #10 already
+#  hardened all pods: runAsNonRoot, drop ALL caps, seccompProfile RuntimeDefault,
+#  allowPrivilegeEscalation=false. Our pods already comply — this label makes
+#  it enforceable and blocks anything future that doesn't.
+# =============================================================================
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ .Release.Namespace }}
+  labels:
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/warn:    restricted
+    pod-security.kubernetes.io/audit:   restricted
