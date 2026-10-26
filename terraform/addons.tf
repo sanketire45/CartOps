@@ -69,8 +69,14 @@ resource "aws_eks_addon" "vpc_cni" {
   # "true" tells the CNI agent to read NetworkPolicy objects and enforce them.
   configuration_values = jsonencode({
     enableNetworkPolicy = "true"
-    # ENABLE_PREFIX_DELEGATION reverted — needs launch template --max-pods=110 override
-    # to actually increase pod count beyond 17. Will be done properly in task #26a.
+    # Prefix delegation: assigns a /28 block (16 IPs) per ENI slot instead of 1 IP.
+    # t3.medium: 3 ENIs × 6 slots × 16 IPs = 288 IPs available (vs 17 without).
+    # REQUIRES the launch template --max-pods=110 override (eks.tf) — without it
+    # kubelet still caps at 17 pods regardless of how many IPs are available.
+    env = {
+      ENABLE_PREFIX_DELEGATION = "true"
+      WARM_PREFIX_TARGET       = "1"  # keep 1 prefix warm per ENI to avoid cold-start delays
+    }
   })
 
   # if a setting already exists, the managed add-on wins (upgrade-safe)

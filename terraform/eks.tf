@@ -19,6 +19,80 @@
 # Current AWS account ID — used in outputs (ECR base URI).
 data "aws_caller_identity" "current" {}
 
+# -----------------------------------------------------------------------------
+#  AMI LOOKUP — always get the latest EKS-optimized AL2023 image for our K8s version.
+#
+#  📖 Terraform insight — data vs resource:
+#       `data` = read-only lookup of something that already EXISTS in AWS.
+#       `resource` = CREATE something new. We use data here because AWS already
+#       maintains this AMI in their public SSM directory — we just read its ID.
+#       Hardcoding an AMI ID is a common mistake in IaC — it goes stale when AWS
+#       patches the image. The SSM path always points to the latest recommended one.
+# -----------------------------------------------------------------------------
+data "aws_ssm_parameter" "eks_ami" {
+  name = "/aws/service/eks/optimized-ami/${var.cluster_version}/amazon-linux-2023/x86_64/standard/recommended/image_id"
+}
+
+# -----------------------------------------------------------------------------
+#  LAUNCH TEMPLATE — overrides kubelet max-pods from the EKS default (17 for
+#  t3.medium) to 110, enabling prefix delegation to actually increase pod density.
+#
+#  WHY THIS IS NEEDED:
+#    EKS auto-creates a managed launch template if you don't supply one. That
+#    template bakes `--max-pods=17` into kubelet at node boot time based on the
+#    ENI formula (3 ENIs × 6 IPs - 1 = 17). Adding more IPs via prefix delegation
+#    is useless unless kubelet is also told it can schedule more pods. You MUST
+#    bring your own launch template to override this — there is no other way.
+#
+#  AL2023 vs AL2 bootstrap:
+#    AL2 (old):   /etc/eks/bootstrap.sh cluster-name --kubelet-extra-args '--max-pods=110'  (bash)
+#    AL2023 (us): nodeadm NodeConfig YAML inside a MIME multipart envelope  (declarative)
+#    Old tutorials all show the AL2 bash approach — it silently does nothing on AL2023.
+#
+#  📖 Terraform insight — lifecycle create_before_destroy:
+#       Without this, Terraform tries to delete the old LT version before creating
+#       the new one. The node group still references the old version → plan fails.
+#       create_before_destroy = true tells Terraform: create new LT version first,
+#       update the reference, THEN delete the old version. Order matters in IaC.
+# -----------------------------------------------------------------------------
+resource "aws_launch_template" "eks_nodes" {
+  name_prefix = "${var.cluster_name}-nodes-"
+  image_id    = data.aws_ssm_parameter.eks_ami.value # dynamic — never hardcode AMI IDs
+
+  block_device_mappings {
+    device_name = "/dev/xvda"
+    ebs {
+      volume_size = var.node_volume_size # moved here — disk_size on node group conflicts with custom LT
+      volume_type = "gp3"               # gp3 = same performance as gp2, ~20% cheaper
+    }
+  }
+
+  # MIME multipart: tells EC2 "this section is a nodeadm NodeConfig, parse it as YAML"
+  # Only overriding maxPods — EKS managed node groups inject cluster name/endpoint/CA automatically.
+  user_data = base64encode(<<-USERDATA
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="==BOUNDARY=="
+
+--==BOUNDARY==
+Content-Type: application/node.eks.aws
+
+---
+apiVersion: node.eks.aws/v1alpha1
+kind: NodeConfig
+spec:
+  kubelet:
+    config:
+      maxPods: 110
+
+--==BOUNDARY==--
+USERDATA
+  )
+
+  lifecycle {
+    create_before_destroy = true
+  }
+}
+
 # Look up the default VPC + its subnets to place the cluster in (>= 2 AZs needed).
 data "aws_vpc" "default" {
   default = true
@@ -69,8 +143,8 @@ resource "aws_eks_node_group" "this" {
   node_role_arn   = aws_iam_role.eks_node.arn # wears the node role from eks-iam.tf
   subnet_ids      = data.aws_subnets.default.ids
 
-  instance_types = [var.node_instance_type] # c7i-flex.large
-  disk_size      = var.node_volume_size     # 20 GB per node
+  instance_types = [var.node_instance_type] # t3.medium
+  # disk_size removed — cannot use with custom launch_template (Terraform will error); lives in LT now
 
   # TIER 1 = the stable "system" base (todo #3). It runs the cluster's brain
   # (CoreDNS, LB controller, metrics-server, and later Karpenter itself).
@@ -81,9 +155,18 @@ resource "aws_eks_node_group" "this" {
   }
 
   scaling_config {
-    desired_size = var.node_desired_size # 2  (small, fixed base — autoscaler comes in #26)
+    desired_size = var.node_desired_size # 2
     min_size     = var.node_min_size     # 2
     max_size     = var.node_max_size     # 2
+  }
+
+  # Wire our custom launch template — EKS passes this to the underlying ASG it manages.
+  # Every node the ASG creates (manual scale or Cluster Autoscaler) boots using this template.
+  # 📖 Terraform insight — without this block EKS silently creates its own LT and you
+  #    cannot override kubelet args. Custom LT = you own the AMI + user_data + disk config.
+  launch_template {
+    id      = aws_launch_template.eks_nodes.id
+    version = aws_launch_template.eks_nodes.latest_version
   }
 
   # No SSH (remote_access) block on purpose: EKS nodes are managed via the API,
