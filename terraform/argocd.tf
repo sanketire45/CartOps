@@ -24,6 +24,7 @@ resource "helm_release" "argocd" {
   chart            = "argo-cd"
   namespace        = "argocd"
   create_namespace = true
+  wait             = false  # destroy: Application finalizer cascade-deletes ecom resources — if ArgoCD pods die mid-way it deadlocks; cluster deletion cleans up
 
   depends_on = [aws_eks_node_group.this] # needs worker nodes to run its pods
 }
@@ -64,6 +65,7 @@ resource "helm_release" "kyverno" {
   namespace        = "kyverno"
   create_namespace = true
   version          = "3.3.7"
+  wait             = false  # destroy: CRD finalizers wait for webhook that's already dying — deadlock; cluster deletion cleans up
 
   set {
     name  = "admissionController.replicas"
@@ -94,6 +96,7 @@ resource "helm_release" "external_secrets" {
   chart            = "external-secrets"
   namespace        = "external-secrets"
   create_namespace = true
+  wait             = false  # destroy: ExternalSecret/ClusterSecretStore finalizers wait for ESO webhook that's dying — deadlock; cluster deletion cleans up
 
   # Wire IRSA: annotate ESO's ServiceAccount with the IAM role ARN created in
   # secrets-manager.tf so the ESO pod can call secretsmanager:GetSecretValue
