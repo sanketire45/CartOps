@@ -21,6 +21,15 @@ spec:
     spec:
       serviceAccountName: product-category-sa   # Phase 3 #9: IRSA — gives this pod AWS identity
       terminationGracePeriodSeconds: 30
+      affinity:                                 # Phase 4 #29: spread replicas across nodes
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels:
+                    app: product-category
+                topologyKey: kubernetes.io/hostname
       initContainers:
         - name: wait-for-mysql
           image: busybox:1.36

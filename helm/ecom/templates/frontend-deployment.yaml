@@ -20,6 +20,15 @@ spec:
         app: frontend
     spec:
       terminationGracePeriodSeconds: 30
+      affinity:                                 # Phase 4 #29: spread replicas across nodes
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels:
+                    app: frontend
+                topologyKey: kubernetes.io/hostname
       securityContext:
         runAsNonRoot: true
         runAsUser: 101                            # nginx user in official nginx image
