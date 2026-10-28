@@ -30,6 +30,13 @@ spec:
                   matchLabels:
                     app: order-service
                 topologyKey: kubernetes.io/hostname
+      topologySpreadConstraints:               # Phase 4 #28: even AZ distribution as replicas scale
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app: order-service
       initContainers:                        # wait for the DB first (same as your raw manifest)
         - name: wait-for-mysql
           image: busybox:1.36

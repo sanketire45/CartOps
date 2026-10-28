@@ -29,6 +29,13 @@ spec:
                   matchLabels:
                     app: frontend
                 topologyKey: kubernetes.io/hostname
+      topologySpreadConstraints:               # Phase 4 #28: even AZ distribution as replicas scale
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app: frontend
       securityContext:
         runAsNonRoot: true
         runAsUser: 101                            # nginx user in official nginx image
