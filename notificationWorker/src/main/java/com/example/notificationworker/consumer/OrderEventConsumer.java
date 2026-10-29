@@ -1,6 +1,7 @@
 package com.example.notificationworker.consumer;
 
 import com.example.notificationworker.service.NotificationService;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import io.awspring.cloud.sqs.annotation.SqsListener;
 import io.awspring.cloud.sqs.listener.acknowledgement.Acknowledgement;
 import lombok.RequiredArgsConstructor;
@@ -13,34 +14,23 @@ import org.springframework.stereotype.Component;
 public class OrderEventConsumer {
 
     private final NotificationService notificationService;
+    private final ObjectMapper objectMapper;
 
-    // @SqsListener polls the queue continuously (long-polling, 20s wait).
-    // acknowledgement-mode=MANUAL means we control when the message is deleted.
-    // The message is NOT deleted from SQS until acknowledgement.acknowledge() is called.
-    //
-    // FLOW:
-    //   1. SQS delivers message → visibility timeout starts (60s from sqs.tf)
-    //   2. notificationService.processOrderEvent() runs (idempotent)
-    //   3. acknowledge() → SQS deletes the message permanently
-    //
-    // If step 2 throws and we never acknowledge:
-    //   → visibility timeout expires → SQS re-delivers to another pod
-    //   → after 3 attempts → moves to DLQ
-
+    // Receives the raw JSON string to avoid Spring Cloud AWS trying to resolve
+    // the publisher's JavaType attribute (com.example.OrderService.events.OrderEventPublisher$OrderEventMessage)
+    // which doesn't exist on this classpath. We own our own deserialization here.
     @SqsListener("${SQS_QUEUE_URL}")
-    public void onOrderEvent(OrderEventMessage message, Acknowledgement acknowledgement) {
-        log.info("Received order event: orderId={}", message.orderId());
+    public void onOrderEvent(String payload, Acknowledgement acknowledgement) {
         try {
+            OrderEventMessage message = objectMapper.readValue(payload, OrderEventMessage.class);
+            log.info("Received order event: orderId={} status={} userId={}", message.orderId(), message.status(), message.userId());
             notificationService.processOrderEvent(message.orderId());
-            acknowledgement.acknowledge();  // delete from SQS only on success
+            acknowledgement.acknowledge();
             log.info("Acknowledged message for orderId={}", message.orderId());
         } catch (Exception e) {
-            // Do NOT acknowledge — SQS will re-deliver up to maxReceiveCount times,
-            // then move to DLQ. The CloudWatch alarm fires when DLQ depth > 0.
-            log.error("Failed to process orderId={} — not acknowledging, will retry", message.orderId(), e);
+            log.error("Failed to process message — not acknowledging, will retry: {}", payload, e);
         }
     }
 
-    // SQS message payload — order-service publishes this as JSON
     public record OrderEventMessage(Long orderId, String status, Long userId) {}
 }
