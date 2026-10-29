@@ -60,6 +60,8 @@ spec:
               value: {{ .Values.notificationWorker.sqsQueueUrl | quote }}
             - name: AWS_REGION
               value: {{ .Values.notificationWorker.awsRegion | quote }}
+            - name: SPRING_DATASOURCE_URL
+              value: "jdbc:mysql://mysql:3306/notification_db"
             - name: SPRING_DATASOURCE_PASSWORD
               valueFrom:
                 secretKeyRef:
