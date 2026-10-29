@@ -97,7 +97,7 @@ spec:
 
 ---
 # -----------------------------------------------------------------------------
-#  Policy 3: allow product + order → mysql:3306
+#  Policy 3: allow product + order + Notificatoin-worker → mysql:3306
 # -----------------------------------------------------------------------------
 #  WHAT:
 #    MySQL should ONLY accept connections from the product-category and
@@ -164,7 +164,7 @@ metadata:
 spec:
   podSelector:
     matchLabels:
-      app: eureka
+      app: eureka-server
   policyTypes:
     - Ingress
   ingress:
@@ -199,6 +199,9 @@ spec:
         - podSelector:
             matchLabels:
               app: frontend
+        - podSelector:
+            matchLabels:
+              app: order-service
       ports:
         - port: {{ .Values.product.port }}
 

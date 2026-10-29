@@ -84,6 +84,8 @@ spec:
               value: "{{ .Values.order.sqsQueueUrl }}"
             - name: AWS_REGION
               value: "{{ .Values.order.awsRegion }}"
+            - name: SPRING_CLOUD_COMPATIBILITY_VERIFIER_ENABLED
+              value: "false"
           volumeMounts:
             - name: tmp
               mountPath: /tmp

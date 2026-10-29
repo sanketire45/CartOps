@@ -29,6 +29,8 @@ repositories {
 
 dependencyManagement {
 	imports {
+		// spring-cloud-aws first — spring-cloud-dependencies (last) wins version conflicts
+		mavenBom "io.awspring.cloud:spring-cloud-aws-dependencies:3.3.0"
 		mavenBom "org.springframework.cloud:spring-cloud-dependencies:2025.0.2"
 	}
 }
@@ -54,8 +56,11 @@ dependencies {
 	implementation 'org.springframework.cloud:spring-cloud-starter-openfeign'
 	//to enable health actualtors
 	implementation 'org.springframework.boot:spring-boot-starter-actuator'
-	// SQS publish (AWS SDK v2, IRSA-compatible — same BOM as notification-worker)
-	implementation 'io.awspring.cloud:spring-cloud-aws-starter-sqs:3.3.0'
+	// SQS publish (AWS SDK v2, IRSA-compatible)
+	implementation 'io.awspring.cloud:spring-cloud-aws-starter-sqs'
+	// Required for IRSA: AWS SDK v2 splits STS into its own module.
+	// Without it, WebIdentityTokenCredentialsProvider fails at runtime.
+	implementation 'software.amazon.awssdk:sts'
 
 }
 
