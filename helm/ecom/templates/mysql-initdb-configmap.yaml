@@ -6,3 +6,4 @@ data:
   init.sql: |
     CREATE DATABASE IF NOT EXISTS ecommerce_db;
     CREATE DATABASE IF NOT EXISTS order_db;
+    CREATE DATABASE IF NOT EXISTS notification_db;
