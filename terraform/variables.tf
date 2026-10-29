@@ -80,9 +80,10 @@ variable "ecr_repos" {
   description = "ECR repository names for each service (account/region come from the provider)"
   type        = map(string)
   default = {
-    product  = "ecom-product-category"
-    order    = "ecom-order-service"
-    eureka   = "ecom-eureka-server"
-    frontend = "ecom-frontend"
+    product              = "ecom-product-category"
+    order                = "ecom-order-service"
+    eureka               = "ecom-eureka-server"
+    frontend             = "ecom-frontend"
+    notification_worker  = "ecom-notification-worker"
   }
 }

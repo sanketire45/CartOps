@@ -21,5 +21,11 @@ ingress:
 
 # Phase 3 #9: IRSA role ARNs (env-specific — prod account would have different ARNs)
 irsa:
-  productRoleArn: "arn:aws:iam::656022989575:role/ecom-product-irsa"
-  orderRoleArn:   "arn:aws:iam::656022989575:role/ecom-order-irsa"
+  productRoleArn:              "arn:aws:iam::656022989575:role/ecom-product-irsa"
+  orderRoleArn:                "arn:aws:iam::656022989575:role/ecom-order-irsa"
+  notificationWorkerRoleArn:   ""   # fill after: terraform apply → output notification_worker_irsa_role_arn
+
+notificationWorker:
+  image: 656022989575.dkr.ecr.us-east-2.amazonaws.com/ecom-notification-worker:latest
+  replicaCount: 1
+  sqsQueueUrl:  ""  # fill after: terraform apply → output order_events_queue_url

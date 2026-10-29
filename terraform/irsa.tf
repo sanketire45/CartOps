@@ -131,6 +131,66 @@ resource "aws_iam_role_policy_attachment" "order" {
   policy_arn = aws_iam_policy.order.arn
 }
 
+# ── notification-worker IRSA ──────────────────────────────────────────────────
+#
+#  Scope: SQS consume only — ReceiveMessage + DeleteMessage + GetQueueUrl
+#  Cannot SendMessage (that's order-service's role only)
+#  Cannot touch any other queue — ARN locked to order-events specifically
+
+data "aws_iam_policy_document" "notification_worker_assume" {
+  statement {
+    effect  = "Allow"
+    actions = ["sts:AssumeRoleWithWebIdentity"]
+
+    principals {
+      type        = "Federated"
+      identifiers = [aws_iam_openid_connect_provider.eks.arn]
+    }
+
+    condition {
+      test     = "StringEquals"
+      variable = "${replace(aws_iam_openid_connect_provider.eks.url, "https://", "")}:sub"
+      values   = ["system:serviceaccount:ecom:notification-worker-sa"]
+    }
+
+    condition {
+      test     = "StringEquals"
+      variable = "${replace(aws_iam_openid_connect_provider.eks.url, "https://", "")}:aud"
+      values   = ["sts.amazonaws.com"]
+    }
+  }
+}
+
+resource "aws_iam_role" "notification_worker" {
+  name               = "${var.cluster_name}-notification-worker-irsa"
+  assume_role_policy = data.aws_iam_policy_document.notification_worker_assume.json
+}
+
+data "aws_iam_policy_document" "notification_worker_permissions" {
+  statement {
+    effect = "Allow"
+    actions = [
+      "sqs:ReceiveMessage",  # poll the queue for new messages
+      "sqs:DeleteMessage",   # delete after successful processing (ack)
+      "sqs:GetQueueUrl",     # resolve queue name → URL at startup
+      "sqs:GetQueueAttributes", # read queue metadata (visibility timeout etc.)
+    ]
+    resources = [
+      "arn:aws:sqs:${var.aws_region}:${data.aws_caller_identity.irsa.account_id}:order-events"
+    ]
+  }
+}
+
+resource "aws_iam_policy" "notification_worker" {
+  name   = "${var.cluster_name}-notification-worker-irsa-policy"
+  policy = data.aws_iam_policy_document.notification_worker_permissions.json
+}
+
+resource "aws_iam_role_policy_attachment" "notification_worker" {
+  role       = aws_iam_role.notification_worker.name
+  policy_arn = aws_iam_policy.notification_worker.arn
+}
+
 # ── Outputs — paste these into values.yaml irsa section ──────────────────────
 output "product_irsa_role_arn" {
   description = "Annotate product-category-sa ServiceAccount with this ARN"
@@ -140,4 +200,9 @@ output "product_irsa_role_arn" {
 output "order_irsa_role_arn" {
   description = "Annotate order-service-sa ServiceAccount with this ARN"
   value       = aws_iam_role.order.arn
+}
+
+output "notification_worker_irsa_role_arn" {
+  description = "Annotate notification-worker-sa ServiceAccount with this ARN"
+  value       = aws_iam_role.notification_worker.arn
 }

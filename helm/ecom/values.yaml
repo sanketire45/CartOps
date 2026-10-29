@@ -35,6 +35,13 @@ frontend:
   image: ecom-frontend:latest
   replicaCount: 2
 
+notificationWorker:
+  image: ecom-notification-worker:latest
+  replicaCount: 1            # KEDA (#25) will override this — starts at 0 when queue empty
+  port: 9090
+  sqsQueueUrl: ""            # set in values-dev.yaml after terraform apply outputs the URL
+  awsRegion: "us-east-2"
+
 # shared non-secret config (becomes the ConfigMap that product + order read)
 config:
   FAKESTORE_BASE_URL: "https://fakestoreapi.in/api/"
