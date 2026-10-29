@@ -118,7 +118,8 @@ aws iam create-policy \
           \"arn:aws:ecr:${REGION}:${ACCOUNT_ID}:repository/ecom-product-category\",
           \"arn:aws:ecr:${REGION}:${ACCOUNT_ID}:repository/ecom-order-service\",
           \"arn:aws:ecr:${REGION}:${ACCOUNT_ID}:repository/ecom-eureka-server\",
-          \"arn:aws:ecr:${REGION}:${ACCOUNT_ID}:repository/ecom-frontend\"
+          \"arn:aws:ecr:${REGION}:${ACCOUNT_ID}:repository/ecom-frontend\",
+          \"arn:aws:ecr:${REGION}:${ACCOUNT_ID}:repository/ecom-notification-worker\"
         ]
       }
     ]
