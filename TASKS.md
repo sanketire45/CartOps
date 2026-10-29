@@ -191,7 +191,7 @@
   HPA on both product-category + order-service (autoscaling/v2, CPU target 60%, min 2 max 5). Added resources.requests.cpu to both deployments (HPA denominator). Load-tested with busybox load-gen pods — watched live scale 2→5 replicas then scale-down with 300s stabilization window. Kyverno + PSA blocked a plain `kubectl run` — fixed with securityContext + pinned tag. PolicyReport FAIL=1 fixed for eureka + frontend by adding resource limits.
   *Interview: "HPA formula" → `ceil(current × cur/target)`; HPA can't scale to zero (KEDA can).*
 
-- [ ] **#38 Add `notification-worker` microservice** 🔨 ⭐⭐ *(Phase 3 — major feature, unlocks KEDA + NetworkPolicy + tracing stories)*
+- [x] **#38 Add `notification-worker` microservice** ✅ *(Phase 3 — major feature, unlocks KEDA + NetworkPolicy + tracing stories)*
   **This is the most important architectural addition.** When an order is placed, `order-service` publishes an event to **AWS SQS** (`order-events` queue). New `notification-worker` Spring Boot service consumes SQS and writes a "notification sent" record to MySQL.
 
   **Build it with production SQS reliability from the start:**
@@ -365,10 +365,10 @@
 - **Phase 0 (app-ready):** **5/5 ✅**
 - **Phase 1 (Foundation):** **7/8** *(#6, #7 are explain-only → cover on-demand)*
 - **Phase 2 (Delivery):** **7/9** ✅ #16 ECR · #14 scanning · CI pipeline · #19 ArgoCD · #5 multi-env · #21 graceful shutdown · #22 rolling-update — remaining: Terraform CI/CD ⏳ · #20 Argo Rollouts ⏳ (after monitoring)
-- **Phase 3 (Cluster-UP):** 🔨 in progress — Security ✅ · Reliability ✅ · Scaling ⏳ (#23 next)
+- **Phase 3 (Cluster-UP):** 🔨 in progress — Security ✅ · Reliability ✅ · Scaling ⏳ (#25 KEDA next)
 - **Monitoring:** ⏳ after Phase 3
 - **Part 2 Failure Labs:** ⏳ after full platform is built
-- **Phase 3 (Cluster-UP):** 10/19 *(+DB recovery)* — #8 #9 #10 #11 #12 #13 #15 #29 #28 #30 done
+- **Phase 3 (Cluster-UP):** 13/19 — #8 #9 #10 #11 #12 #13 #15 #29 #28 #30 #23 #24 #38 done · remaining: #25 KEDA · #26a CA · #26b Karpenter · #31 MySQL gp3 · #32 Velero · #33 EFS · #34 ResourceQuota · #35 Reloader · #36 ALB+TLS
 - **Monitoring:** 0/4
 - **Part 2 Failure Labs:** 0/34
 
