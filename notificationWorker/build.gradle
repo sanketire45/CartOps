@@ -30,6 +30,9 @@ dependencies {
 
 	// SQS — Spring Cloud AWS v3 (AWS SDK v2 under the hood, IRSA-compatible)
 	implementation 'io.awspring.cloud:spring-cloud-aws-starter-sqs'
+	// Required for IRSA: AWS SDK v2 splits STS into its own module.
+	// Without it, WebIdentityTokenCredentialsProvider fails at runtime.
+	implementation 'software.amazon.awssdk:sts'
 
 	// Database — JPA + Flyway + MySQL driver
 	implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
