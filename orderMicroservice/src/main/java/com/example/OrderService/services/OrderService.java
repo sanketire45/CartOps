@@ -8,6 +8,7 @@ import com.example.OrderService.dto.OrderRequestDTO;
 import com.example.OrderService.dto.ProductDTO;
 import com.example.OrderService.entity.Order;
 import com.example.OrderService.entity.OrderItem;
+import com.example.OrderService.events.OrderEventPublisher;
 import com.example.OrderService.mapper.OrderItemMapper;
 import com.example.OrderService.mapper.OrderMapper;
 import com.example.OrderService.repository.OrderRepository;
@@ -24,12 +25,15 @@ import com.example.OrderService.dto.OrderItemResponseDTO;
 public class OrderService implements IOrderService{
 
     private final OrderRepository orderRepository;
-    //private final ProductServiceClient productServiceClient;
     private final feignProductServiceClient feignProductServiceClient;
+    private final OrderEventPublisher orderEventPublisher;
 
-    public OrderService(OrderRepository orderRepository, feignProductServiceClient feignProductServiceClient){
+    public OrderService(OrderRepository orderRepository,
+                        feignProductServiceClient feignProductServiceClient,
+                        OrderEventPublisher orderEventPublisher) {
         this.orderRepository = orderRepository;
         this.feignProductServiceClient = feignProductServiceClient;
+        this.orderEventPublisher = orderEventPublisher;
     }
 
     @Override
@@ -57,6 +61,8 @@ public class OrderService implements IOrderService{
 
        order.setItems(items);
        Order CreatedOrder = orderRepository.save(order);
+
+       orderEventPublisher.publishOrderPlaced(CreatedOrder.getId(), CreatedOrder.getStatus(), CreatedOrder.getUserId());
 
        return OrderMapper.toCreateOrderResponseDTO(CreatedOrder);
     }

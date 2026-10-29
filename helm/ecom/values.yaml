@@ -25,6 +25,8 @@ order:
   image: order-service:v2
   replicaCount: 2
   port: 7878
+  sqsQueueUrl: ""
+  awsRegion: "us-east-2"
   hpa:
     enabled: true
     minReplicas: 2

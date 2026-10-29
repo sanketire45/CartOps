@@ -54,6 +54,8 @@ dependencies {
 	implementation 'org.springframework.cloud:spring-cloud-starter-openfeign'
 	//to enable health actualtors
 	implementation 'org.springframework.boot:spring-boot-starter-actuator'
+	// SQS publish (AWS SDK v2, IRSA-compatible — same BOM as notification-worker)
+	implementation 'io.awspring.cloud:spring-cloud-aws-starter-sqs:3.3.0'
 
 }
 

@@ -160,13 +160,18 @@ pipeline {
                         script {
                             dir('frontend') {
                                 docker_build("ecom-frontend", params.IMAGE_TAG, env.ECR_REGISTRY)
-                                // try {
-                                //     trivy_image_scan("${env.ECR_REGISTRY}/ecom-frontend:${params.IMAGE_TAG}")
-                                // } catch (e) {
-                                //     currentBuild.result = 'UNSTABLE'
-                                //     echo "Trivy: CVEs found in frontend — marking UNSTABLE, ECR push continues"
-                                // }
                                 ecr_push("ecom-frontend", params.IMAGE_TAG, env.AWS_REGION, env.ECR_REGISTRY)
+                            }
+                        }
+                    }
+                }
+
+                stage("notification-worker") {
+                    steps {
+                        script {
+                            dir('notificationWorker') {
+                                docker_build("ecom-notification-worker", params.IMAGE_TAG, env.ECR_REGISTRY)
+                                ecr_push("ecom-notification-worker", params.IMAGE_TAG, env.AWS_REGION, env.ECR_REGISTRY)
                             }
                         }
                     }

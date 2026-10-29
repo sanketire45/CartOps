@@ -6,6 +6,7 @@ product:
 order:
   image: 656022989575.dkr.ecr.us-east-2.amazonaws.com/ecom-order-service:v0.0.2
   replicaCount: 2
+  sqsQueueUrl: "https://sqs.us-east-2.amazonaws.com/656022989575/order-events"
 
 eureka:
   image: 656022989575.dkr.ecr.us-east-2.amazonaws.com/ecom-eureka-server:v0.0.2
@@ -23,9 +24,9 @@ ingress:
 irsa:
   productRoleArn:              "arn:aws:iam::656022989575:role/ecom-product-irsa"
   orderRoleArn:                "arn:aws:iam::656022989575:role/ecom-order-irsa"
-  notificationWorkerRoleArn:   ""   # fill after: terraform apply → output notification_worker_irsa_role_arn
+  notificationWorkerRoleArn:   "arn:aws:iam::656022989575:role/ecom-notification-worker-irsa"
 
 notificationWorker:
   image: 656022989575.dkr.ecr.us-east-2.amazonaws.com/ecom-notification-worker:latest
   replicaCount: 1
-  sqsQueueUrl:  ""  # fill after: terraform apply → output order_events_queue_url
+  sqsQueueUrl:  "https://sqs.us-east-2.amazonaws.com/656022989575/order-events"

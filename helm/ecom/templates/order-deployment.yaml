@@ -80,6 +80,10 @@ spec:
                 secretKeyRef:
                   name: mysql-secret
                   key: password
+            - name: SQS_QUEUE_URL
+              value: "{{ .Values.order.sqsQueueUrl }}"
+            - name: AWS_REGION
+              value: "{{ .Values.order.awsRegion }}"
           volumeMounts:
             - name: tmp
               mountPath: /tmp
