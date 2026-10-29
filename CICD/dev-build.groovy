@@ -98,10 +98,10 @@ pipeline {
             }
         }
 
-        // ── 7. Parallel build + Trivy image scan + ECR push ───────────────────
-        // Each service: docker build → trivy image scan → aws ecr login → docker push
-        // All 4 run simultaneously — total time = longest single build (~3 min)
-        stage("Docker: Build + Scan + Push (parallel)") {
+        // ── 7a. Parallel build (all 5 services) ──────────────────────────────────
+        // Build all images first. If ANY build fails the pipeline stops here —
+        // nothing is pushed to ECR, so there is no partial-push state to clean up.
+        stage("Docker: Build (parallel)") {
             parallel {
 
                 stage("product-category") {
@@ -109,13 +109,6 @@ pipeline {
                         script {
                             dir('ProductAndCategoryMicroservice') {
                                 docker_build("ecom-product-category", params.IMAGE_TAG, env.ECR_REGISTRY)
-                                // try {
-                                //     trivy_image_scan("${env.ECR_REGISTRY}/ecom-product-category:${params.IMAGE_TAG}")
-                                // } catch (e) {
-                                //     currentBuild.result = 'UNSTABLE'
-                                //     echo "Trivy: CVEs found in product-category — marking UNSTABLE, ECR push continues"
-                                // }
-                                ecr_push("ecom-product-category", params.IMAGE_TAG, env.AWS_REGION, env.ECR_REGISTRY)
                             }
                         }
                     }
@@ -126,13 +119,6 @@ pipeline {
                         script {
                             dir('orderMicroservice') {
                                 docker_build("ecom-order-service", params.IMAGE_TAG, env.ECR_REGISTRY)
-                                // try {
-                                //     trivy_image_scan("${env.ECR_REGISTRY}/ecom-order-service:${params.IMAGE_TAG}")
-                                // } catch (e) {
-                                //     currentBuild.result = 'UNSTABLE'
-                                //     echo "Trivy: CVEs found in order-service — marking UNSTABLE, ECR push continues"
-                                // }
-                                ecr_push("ecom-order-service", params.IMAGE_TAG, env.AWS_REGION, env.ECR_REGISTRY)
                             }
                         }
                     }
@@ -143,13 +129,6 @@ pipeline {
                         script {
                             dir('Servicediscoverywitheureka') {
                                 docker_build("ecom-eureka-server", params.IMAGE_TAG, env.ECR_REGISTRY)
-                                // try {
-                                //     trivy_image_scan("${env.ECR_REGISTRY}/ecom-eureka-server:${params.IMAGE_TAG}")
-                                // } catch (e) {
-                                //     currentBuild.result = 'UNSTABLE'
-                                //     echo "Trivy: CVEs found in eureka-server — marking UNSTABLE, ECR push continues"
-                                // }
-                                ecr_push("ecom-eureka-server", params.IMAGE_TAG, env.AWS_REGION, env.ECR_REGISTRY)
                             }
                         }
                     }
@@ -160,7 +139,6 @@ pipeline {
                         script {
                             dir('frontend') {
                                 docker_build("ecom-frontend", params.IMAGE_TAG, env.ECR_REGISTRY)
-                                ecr_push("ecom-frontend", params.IMAGE_TAG, env.AWS_REGION, env.ECR_REGISTRY)
                             }
                         }
                     }
@@ -171,8 +149,57 @@ pipeline {
                         script {
                             dir('notificationWorker') {
                                 docker_build("ecom-notification-worker", params.IMAGE_TAG, env.ECR_REGISTRY)
-                                ecr_push("ecom-notification-worker", params.IMAGE_TAG, env.AWS_REGION, env.ECR_REGISTRY)
                             }
+                        }
+                    }
+                }
+
+            }
+        }
+
+        // ── 7b. Parallel ECR push (all 5 services) ───────────────────────────────
+        // Only reached when all 5 builds above succeeded.
+        // Pushes atomically — ArgoCD never sees a tag that exists in Git but is
+        // missing from ECR.
+        stage("Docker: Push to ECR (parallel)") {
+            parallel {
+
+                stage("product-category") {
+                    steps {
+                        script {
+                            ecr_push("ecom-product-category", params.IMAGE_TAG, env.AWS_REGION, env.ECR_REGISTRY)
+                        }
+                    }
+                }
+
+                stage("order-service") {
+                    steps {
+                        script {
+                            ecr_push("ecom-order-service", params.IMAGE_TAG, env.AWS_REGION, env.ECR_REGISTRY)
+                        }
+                    }
+                }
+
+                stage("eureka-server") {
+                    steps {
+                        script {
+                            ecr_push("ecom-eureka-server", params.IMAGE_TAG, env.AWS_REGION, env.ECR_REGISTRY)
+                        }
+                    }
+                }
+
+                stage("frontend") {
+                    steps {
+                        script {
+                            ecr_push("ecom-frontend", params.IMAGE_TAG, env.AWS_REGION, env.ECR_REGISTRY)
+                        }
+                    }
+                }
+
+                stage("notification-worker") {
+                    steps {
+                        script {
+                            ecr_push("ecom-notification-worker", params.IMAGE_TAG, env.AWS_REGION, env.ECR_REGISTRY)
                         }
                     }
                 }
