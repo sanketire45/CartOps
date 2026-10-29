@@ -3,7 +3,6 @@ package com.example.notificationworker.consumer;
 import com.example.notificationworker.service.NotificationService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.awspring.cloud.sqs.annotation.SqsListener;
-import io.awspring.cloud.sqs.listener.acknowledgement.Acknowledgement;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
@@ -16,19 +15,19 @@ public class OrderEventConsumer {
     private final NotificationService notificationService;
     private final ObjectMapper objectMapper;
 
-    // Receives the raw JSON string to avoid Spring Cloud AWS trying to resolve
-    // the publisher's JavaType attribute (com.example.OrderService.events.OrderEventPublisher$OrderEventMessage)
-    // which doesn't exist on this classpath. We own our own deserialization here.
+    // String payload bypasses Spring Cloud AWS JavaType resolution — we deserialize manually.
+    // No Acknowledgement param: default ON_SUCCESS mode auto-acks after method returns.
+    // Re-throw on failure so the message stays in SQS and retries.
     @SqsListener("${SQS_QUEUE_URL}")
-    public void onOrderEvent(String payload, Acknowledgement acknowledgement) {
+    public void onOrderEvent(String payload) {
         try {
             OrderEventMessage message = objectMapper.readValue(payload, OrderEventMessage.class);
             log.info("Received order event: orderId={} status={} userId={}", message.orderId(), message.status(), message.userId());
             notificationService.processOrderEvent(message.orderId());
-            acknowledgement.acknowledge();
-            log.info("Acknowledged message for orderId={}", message.orderId());
+            log.info("Processed order event for orderId={}", message.orderId());
         } catch (Exception e) {
-            log.error("Failed to process message — not acknowledging, will retry: {}", payload, e);
+            log.error("Failed to process message — will retry: {}", payload, e);
+            throw new RuntimeException(e);
         }
     }
 
