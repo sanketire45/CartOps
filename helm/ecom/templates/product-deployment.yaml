@@ -41,6 +41,10 @@ spec:
         - name: wait-for-mysql
           image: busybox:1.36
           command: ['sh','-c','until nc -z mysql 3306; do echo "waiting for mysql..."; sleep 2; done; echo "mysql is up!"']
+          securityContext:                      # Kyverno requires this on every container incl. init
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
       securityContext:                          # Phase 3 #10: pod-level — applies to all containers
         runAsNonRoot: true
         runAsUser: 1000

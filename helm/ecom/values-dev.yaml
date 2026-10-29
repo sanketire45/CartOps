@@ -1,11 +1,11 @@
 # dev environment overrides — Jenkins updates image tags here after every build
 product:
   image: 656022989575.dkr.ecr.us-east-2.amazonaws.com/ecom-product-category:v0.0.2
-  replicaCount: 1
+  replicaCount: 2
 
 order:
   image: 656022989575.dkr.ecr.us-east-2.amazonaws.com/ecom-order-service:v0.0.2
-  replicaCount: 1
+  replicaCount: 2
 
 eureka:
   image: 656022989575.dkr.ecr.us-east-2.amazonaws.com/ecom-eureka-server:v0.0.2
