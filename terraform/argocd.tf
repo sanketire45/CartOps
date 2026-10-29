@@ -26,7 +26,12 @@ resource "helm_release" "argocd" {
   create_namespace = true
   wait             = false  # destroy: Application finalizer cascade-deletes ecom resources — if ArgoCD pods die mid-way it deadlocks; cluster deletion cleans up
 
-  depends_on = [aws_eks_node_group.this] # needs worker nodes to run its pods
+  depends_on = [
+    aws_eks_node_group.this,
+    helm_release.aws_lbc, # LBC registers a MutatingWebhookConfiguration that intercepts ALL Service
+                          # creations. Without this, argocd starts in parallel with LBC and hits
+                          # "no endpoints available for aws-load-balancer-webhook-service".
+  ]
 }
 
 # =============================================================================
@@ -72,7 +77,10 @@ resource "helm_release" "kyverno" {
     value = "1"   # dev: 1 replica is enough; prod: 3 for HA
   }
 
-  depends_on = [aws_eks_node_group.this]
+  depends_on = [
+    aws_eks_node_group.this,
+    helm_release.aws_lbc, # LBC webhook race — same reason as argocd above
+  ]
 }
 
 # =============================================================================
@@ -108,5 +116,6 @@ resource "helm_release" "external_secrets" {
   depends_on = [
     aws_eks_node_group.this,
     aws_iam_role_policy_attachment.eso_secrets, # role must exist before ESO starts
+    helm_release.aws_lbc,                       # LBC webhook race — same reason as argocd above
   ]
 }

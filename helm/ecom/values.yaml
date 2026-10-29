@@ -15,11 +15,21 @@ product:
   image: product-category:v99-nope
   replicaCount: 2
   port: 8080
+  hpa:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 5
+    cpuTargetPercent: 60    # scale out when average pod CPU crosses 60% of requests.cpu
 
 order:
   image: order-service:v2
   replicaCount: 2
   port: 7878
+  hpa:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 5
+    cpuTargetPercent: 60
 
 frontend:
   image: ecom-frontend:latest

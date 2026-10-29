@@ -17,21 +17,28 @@
 #        built first, then this connects to it.)
 # =============================================================================
 
-# A short-lived auth token for the cluster, generated from your AWS identity.
-data "aws_eks_cluster_auth" "this" {
-  name = aws_eks_cluster.this.name
-}
-
+# exec auth — calls `aws eks get-token` fresh on EVERY API call.
+# The static `data.aws_eks_cluster_auth` token was valid for only 15 minutes;
+# long applies (ingress-nginx waiting for NLB, etc.) would hit "client to provide
+# credentials" errors once that window passed. exec auth never expires mid-apply.
 provider "kubernetes" {
   host                   = aws_eks_cluster.this.endpoint
   cluster_ca_certificate = base64decode(aws_eks_cluster.this.certificate_authority[0].data)
-  token                  = data.aws_eks_cluster_auth.this.token
+  exec {
+    api_version = "client.authentication.k8s.io/v1beta1"
+    command     = "aws"
+    args        = ["eks", "get-token", "--cluster-name", aws_eks_cluster.this.name, "--region", var.aws_region]
+  }
 }
 
 provider "helm" {
   kubernetes {
     host                   = aws_eks_cluster.this.endpoint
     cluster_ca_certificate = base64decode(aws_eks_cluster.this.certificate_authority[0].data)
-    token                  = data.aws_eks_cluster_auth.this.token
+    exec {
+      api_version = "client.authentication.k8s.io/v1beta1"
+      command     = "aws"
+      args        = ["eks", "get-token", "--cluster-name", aws_eks_cluster.this.name, "--region", var.aws_region]
+    }
   }
 }

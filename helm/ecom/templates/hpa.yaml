@@ -1,0 +1,90 @@
+# =============================================================================
+#  hpa.yaml — Horizontal Pod Autoscaler for product-category + order-service
+# =============================================================================
+#  HOW IT WORKS:
+#    HPA polls metrics.k8s.io (served by metrics-server) every 15s.
+#    Formula: desiredReplicas = ceil(current × currentUsage / targetUsage)
+#    Example: 2 pods at 80% CPU, target 60% → ceil(2 × 80/60) = ceil(2.67) = 3
+#
+#  API VERSION — autoscaling/v2:
+#    v1 is CPU-only and deprecated. v2 supports multiple metrics simultaneously
+#    (CPU + memory, or CPU + custom metric). We use v2 even for CPU-only today
+#    so adding a second metric later requires no migration.
+#
+#  ARGOCD ignoreDifferences:
+#    ArgoCD reads desired replicas from values.yaml (2). After HPA scales to 3,
+#    ArgoCD sees "live=3, git=2" → marks OutOfSync → selfHeal reverts to 2.
+#    Fix: add /spec/replicas to ignoreDifferences in ecom-dev.yaml (done there).
+# =============================================================================
+
+{{- if .Values.product.hpa.enabled }}
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: product-category
+  namespace: ecom
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: product-category          # must match metadata.name in product-deployment.yaml
+  minReplicas: {{ .Values.product.hpa.minReplicas }}
+  maxReplicas: {{ .Values.product.hpa.maxReplicas }}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization          # % of the pod's requests.cpu limit
+          averageUtilization: {{ .Values.product.hpa.cpuTargetPercent }}
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300   # wait 5 min before scaling down — avoids flapping
+      policies:
+        - type: Pods
+          value: 1
+          periodSeconds: 60             # remove at most 1 pod per minute when scaling down
+    scaleUp:
+      stabilizationWindowSeconds: 0     # scale up immediately — don't wait during traffic spike
+      policies:
+        - type: Pods
+          value: 2
+          periodSeconds: 60             # add at most 2 pods per minute when scaling up
+{{- end }}
+
+---
+
+{{- if .Values.order.hpa.enabled }}
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: order-service
+  namespace: ecom
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: order-service             # must match metadata.name in order-deployment.yaml
+  minReplicas: {{ .Values.order.hpa.minReplicas }}
+  maxReplicas: {{ .Values.order.hpa.maxReplicas }}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.order.hpa.cpuTargetPercent }}
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+        - type: Pods
+          value: 1
+          periodSeconds: 60
+    scaleUp:
+      stabilizationWindowSeconds: 0
+      policies:
+        - type: Pods
+          value: 2
+          periodSeconds: 60
+{{- end }}

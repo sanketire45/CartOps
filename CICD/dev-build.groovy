@@ -5,7 +5,7 @@
 // =============================================================================
 //  FLOW:
 //    validate → checkout → trivy (filesystem) → OWASP → SonarQube →
-//    parallel build+scan+push (4 services) → update values-prod.yaml → git push
+//    parallel build+scan+push (4 services) → update values-dev.yaml → git push
 //
 //  WHY PARALLEL:
 //    4 Spring Boot services × ~3 min each = 12 min sequential.
@@ -212,8 +212,12 @@ pipeline {
                             git config user.email "jenkins@ecom.local"
                             git config user.name  "Jenkins CI"
                             git add helm/ecom/values-dev.yaml
-                            git commit -m "ci: bump image tag to ${params.IMAGE_TAG} [skip ci]"
-                            git push origin main
+                            if git diff --cached --quiet; then
+                                echo "No tag change — values-dev.yaml already at ${params.IMAGE_TAG}, skipping commit"
+                            else
+                                git commit -m "ci: bump image tag to ${params.IMAGE_TAG} [skip ci]"
+                                git push origin main
+                            fi
                         """
                     }
                 }

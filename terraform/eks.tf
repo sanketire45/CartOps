@@ -20,20 +20,6 @@
 data "aws_caller_identity" "current" {}
 
 # -----------------------------------------------------------------------------
-#  AMI LOOKUP — always get the latest EKS-optimized AL2023 image for our K8s version.
-#
-#  📖 Terraform insight — data vs resource:
-#       `data` = read-only lookup of something that already EXISTS in AWS.
-#       `resource` = CREATE something new. We use data here because AWS already
-#       maintains this AMI in their public SSM directory — we just read its ID.
-#       Hardcoding an AMI ID is a common mistake in IaC — it goes stale when AWS
-#       patches the image. The SSM path always points to the latest recommended one.
-# -----------------------------------------------------------------------------
-data "aws_ssm_parameter" "eks_ami" {
-  name = "/aws/service/eks/optimized-ami/${var.cluster_version}/amazon-linux-2023/x86_64/standard/recommended/image_id"
-}
-
-# -----------------------------------------------------------------------------
 #  LAUNCH TEMPLATE — overrides kubelet max-pods from the EKS default (17 for
 #  t3.medium) to 110, enabling prefix delegation to actually increase pod density.
 #
@@ -49,6 +35,13 @@ data "aws_ssm_parameter" "eks_ami" {
 #    AL2023 (us): nodeadm NodeConfig YAML inside a MIME multipart envelope  (declarative)
 #    Old tutorials all show the AL2 bash approach — it silently does nothing on AL2023.
 #
+#  NO image_id ON PURPOSE:
+#    When image_id is set in a custom launch template, EKS stops injecting the
+#    cluster bootstrap info (name, endpoint, CA) into the node's user data.
+#    nodeadm then fails: "Name is missing in cluster configuration" → node never joins.
+#    Without image_id, EKS uses the default AL2023 AMI for the cluster version AND
+#    merges our NodeConfig (maxPods) with the cluster info it injects. Best of both.
+#
 #  📖 Terraform insight — lifecycle create_before_destroy:
 #       Without this, Terraform tries to delete the old LT version before creating
 #       the new one. The node group still references the old version → plan fails.
@@ -57,7 +50,7 @@ data "aws_ssm_parameter" "eks_ami" {
 # -----------------------------------------------------------------------------
 resource "aws_launch_template" "eks_nodes" {
   name_prefix = "${var.cluster_name}-nodes-"
-  image_id    = data.aws_ssm_parameter.eks_ami.value # dynamic — never hardcode AMI IDs
+  # image_id intentionally omitted — see NO image_id ON PURPOSE comment above
 
   block_device_mappings {
     device_name = "/dev/xvda"

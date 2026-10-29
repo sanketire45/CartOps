@@ -37,6 +37,24 @@ spec:
     server: https://kubernetes.default.svc
     namespace: ecom   # ArgoCD creates this namespace automatically
 
+  # HPA writes the live replica count on the Deployment's spec.replicas field.
+  # Without this, ArgoCD sees "live=3, git=2" → marks OutOfSync → selfHeal reverts
+  # the HPA's scale back to 2 every sync cycle. ignoreDifferences tells ArgoCD
+  # "I know this field will differ — that's intentional, don't touch it."
+  ignoreDifferences:
+    - group: apps
+      kind: Deployment
+      name: product-category
+      namespace: ecom
+      jsonPointers:
+        - /spec/replicas
+    - group: apps
+      kind: Deployment
+      name: order-service
+      namespace: ecom
+      jsonPointers:
+        - /spec/replicas
+
   syncPolicy:
     automated:
       prune: true       # remove K8s resources deleted from Helm chart
