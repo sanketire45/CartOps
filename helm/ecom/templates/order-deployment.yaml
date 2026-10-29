@@ -80,7 +80,7 @@ spec:
             httpGet:
               path: /actuator/health/readiness
               port: {{ .Values.order.port }}
-            failureThreshold: 30
+            failureThreshold: 60   # 60x5s=5min — Eureka registration on t3.medium can take >2min on first/cold boot
             periodSeconds: 5
           livenessProbe:
             httpGet:

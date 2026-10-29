@@ -83,7 +83,7 @@ spec:
             httpGet:
               path: /actuator/health/readiness
               port: {{ .Values.product.port }}
-            failureThreshold: 30
+            failureThreshold: 60   # 60x5s=5min — Eureka registration + Flyway on first boot can take >2min on t3.medium
             periodSeconds: 5
           livenessProbe:
             httpGet:
