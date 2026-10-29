@@ -23,12 +23,6 @@ repositories {
 	mavenCentral()
 }
 
-dependencyManagement {
-	imports {
-		mavenBom "io.awspring.cloud:spring-cloud-aws-dependencies:3.3.0"
-	}
-}
-
 dependencies {
 	// Web + Actuator (health probes for K8s startupProbe/livenessProbe/readinessProbe)
 	implementation 'org.springframework.boot:spring-boot-starter-web'
@@ -57,8 +51,9 @@ dependencies {
 
 dependencyManagement {
 	imports {
-		mavenBom "org.springframework.cloud:spring-cloud-dependencies:2025.0.2"
+		// spring-cloud-aws first — spring-cloud-dependencies (last) wins version conflicts
 		mavenBom "io.awspring.cloud:spring-cloud-aws-dependencies:3.3.0"
+		mavenBom "org.springframework.cloud:spring-cloud-dependencies:2025.0.2"
 	}
 }
 

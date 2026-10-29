@@ -62,6 +62,8 @@ spec:
               value: {{ .Values.notificationWorker.awsRegion | quote }}
             - name: SPRING_DATASOURCE_URL
               value: "jdbc:mysql://mysql:3306/notification_db"
+            - name: SPRING_CLOUD_COMPATIBILITY_VERIFIER_ENABLED
+              value: "false"
             - name: SPRING_DATASOURCE_PASSWORD
               valueFrom:
                 secretKeyRef:
