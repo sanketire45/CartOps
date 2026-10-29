@@ -264,16 +264,7 @@ pipeline {
             echo "Build ${params.IMAGE_TAG} pushed to ECR. ArgoCD will deploy shortly."
         }
         failure {
-            emailext(
-                attachLog: true,
-                subject: "CartOps CI FAILED — build #${env.BUILD_NUMBER} tag ${params.IMAGE_TAG}",
-                body: """Build #${env.BUILD_NUMBER} failed.
-Tag     : ${params.IMAGE_TAG}
-Console : ${env.BUILD_URL}
-
-Check the attached log for the failing stage.""",
-                to: 'sanketire97@gmail.com'
-            )
+            echo "Build ${params.IMAGE_TAG} FAILED — check console output above."
         }
     }
 }
