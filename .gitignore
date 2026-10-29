@@ -21,7 +21,9 @@ out/
 .gradle/
 *.class
 *.jar
-!gradle/wrapper/gradle-wrapper.jar   # keep the wrapper jar (needed for CI)
+!gradle/wrapper/gradle-wrapper.jar
+!*/gradle/wrapper/gradle-wrapper.jar
+!*/*/gradle/wrapper/gradle-wrapper.jar
 
 # ── Node / frontend ───────────────────────────────────────────────────────────
 node_modules/
