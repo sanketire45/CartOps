@@ -133,6 +133,9 @@ spec:
         - podSelector:
             matchLabels:
               app: order-service
+        - podSelector:
+            matchLabels:
+              app: notification-worker
       ports:
         - port: {{ .Values.mysql.port }}
 
