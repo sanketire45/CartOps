@@ -1,0 +1,59 @@
+# =============================================================================
+#  notification-worker-scaledobject.yaml — Task #25: KEDA ScaledObject
+# =============================================================================
+#  WHAT:
+#    ScaledObject is KEDA's core resource. It says: "watch this external metric,
+#    and keep this Deployment scaled to the right number of replicas."
+#
+#  HOW KEDA SCALES:
+#    desiredReplicas = ceil(ApproximateNumberOfMessages / queueLength)
+#    queue depth=0  → 0 replicas  (scale to zero — idle, no cost)
+#    queue depth=3  → 1 replica   (ceil(3/5) = 1)
+#    queue depth=12 → 3 replicas  (ceil(12/5) = 3)
+#    queue depth=25 → 5 replicas  (capped at maxReplicaCount)
+#
+#  KEDA CREATES AN HPA INTERNALLY:
+#    After applying this, run: kubectl get hpa -n ecom
+#    You will see: keda-hpa-notification-worker
+#    KEDA creates and owns this HPA — never edit it directly.
+#    The HPA is fed an external metric from KEDA's metrics adapter, not CPU.
+#
+#  cooldownPeriod:
+#    After the queue drains to 0, KEDA waits this many seconds before
+#    setting replicas=0. Prevents thrashing when messages arrive in bursts:
+#    a new message arriving 20s after drain won't trigger a full cold-start cycle.
+#
+#  identityOwner: operator:
+#    KEDA uses keda-operator SA's IRSA role (GetQueueAttributes) to poll queue.
+#    Safe at scale-to-zero — no notification-worker pod needs to exist for KEDA
+#    to detect new messages and trigger scale-up.
+# =============================================================================
+
+{{- if .Values.notificationWorker.keda.enabled }}
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: notification-worker-scaledobject
+  namespace: {{ .Release.Namespace }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: notification-worker      # must match metadata.name in notification-worker-deployment.yaml
+
+  minReplicaCount: 0               # scale to zero when queue is empty — HPA can never do this
+  maxReplicaCount: {{ .Values.notificationWorker.keda.maxReplicas }}
+
+  # wait 30s after queue empties before scaling to 0 — absorbs small bursts without cold starts
+  cooldownPeriod: 30
+
+  triggers:
+    - type: aws-sqs-queue
+      authenticationRef:
+        name: keda-trigger-auth-aws   # reference to TriggerAuthentication above
+      metadata:
+        queueURL: {{ .Values.notificationWorker.sqsQueueUrl | quote }}
+        queueLength: {{ .Values.notificationWorker.keda.queueLength | quote }}
+        awsRegion: {{ .Values.notificationWorker.awsRegion | quote }}
+        identityOwner: operator   # keda-operator SA's IRSA role calls GetQueueAttributes
+{{- end }}

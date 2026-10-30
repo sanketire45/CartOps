@@ -30,3 +30,7 @@ notificationWorker:
   image: 656022989575.dkr.ecr.us-east-2.amazonaws.com/ecom-notification-worker:v0.0.11
   replicaCount: 1
   sqsQueueUrl:  "https://sqs.us-east-2.amazonaws.com/656022989575/order-events"
+  keda:
+    enabled: true
+    maxReplicas: 5
+    queueLength: "5"

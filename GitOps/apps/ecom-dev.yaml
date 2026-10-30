@@ -54,6 +54,14 @@ spec:
       namespace: ecom
       jsonPointers:
         - /spec/replicas
+    # KEDA sets notification-worker replicas to 0 when queue is empty.
+    # Without this, ArgoCD sees "live=0, git=1" and reverts it every sync cycle.
+    - group: apps
+      kind: Deployment
+      name: notification-worker
+      namespace: ecom
+      jsonPointers:
+        - /spec/replicas
 
   syncPolicy:
     automated:
@@ -61,4 +69,4 @@ spec:
       selfHeal: true    # re-sync if cluster state drifts from Git
     syncOptions:
       - CreateNamespace=true
-      - ServerSideApply=true   # handles large CRDs without annotation size limit
+      - ServerSideApply=true   # handles large CRDkubectl get hpa -n ecom -ws without annotation size limit

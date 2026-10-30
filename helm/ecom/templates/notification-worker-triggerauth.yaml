@@ -1,0 +1,29 @@
+# =============================================================================
+#  notification-worker-triggerauth.yaml — Task #25: KEDA TriggerAuthentication
+# =============================================================================
+#  WHAT:
+#    TriggerAuthentication tells KEDA *how* to authenticate with AWS when
+#    calling GetQueueAttributes to read the SQS queue depth.
+#
+#  podIdentity.provider: aws — IRSA (no static credentials):
+#    KEDA operator's own pod has a SA annotation pointing to keda-operator-irsa
+#    (created in terraform/keda.tf). The AWS SDK inside KEDA reads the projected
+#    service account token from the pod's filesystem and exchanges it for
+#    temporary credentials via AWS STS. Zero secrets stored in the cluster.
+#
+#  identityOwner: operator (set in ScaledObject, not here):
+#    "operator" means KEDA uses this SA's role — not the notification-worker
+#    pod's role — to call GetQueueAttributes. Safe at scale-to-zero: KEDA can
+#    still poll the queue even when there are 0 notification-worker pods running.
+# =============================================================================
+
+{{- if .Values.notificationWorker.keda.enabled }}
+apiVersion: keda.sh/v1alpha1
+kind: TriggerAuthentication
+metadata:
+  name: keda-trigger-auth-aws
+  namespace: {{ .Release.Namespace }}
+spec:
+  podIdentity:
+    provider: aws   # use the IRSA role annotated on keda-operator SA in kube-system
+{{- end }}

@@ -39,10 +39,14 @@ frontend:
 
 notificationWorker:
   image: ecom-notification-worker:latest
-  replicaCount: 1            # KEDA (#25) will override this — starts at 0 when queue empty
+  replicaCount: 1            # KEDA overrides this — set to 0 when queue empty
   port: 9090
-  sqsQueueUrl: ""            # set in values-dev.yaml after terraform apply outputs the URL
+  sqsQueueUrl: ""            # set in values-dev.yaml
   awsRegion: "us-east-2"
+  keda:
+    enabled: false           # disabled by default; values-dev.yaml sets true
+    maxReplicas: 5           # cap — 1 worker per queueLength messages, max 5
+    queueLength: "5"         # target messages per replica: ceil(depth / 5) = replicas
 
 # shared non-secret config (becomes the ConfigMap that product + order read)
 config:
