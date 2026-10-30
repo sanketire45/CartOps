@@ -16,6 +16,13 @@
 7. [RBAC](#7-rbac)
 8. [Services & Networking](#8-services--networking)
 9. [Node Capacity & Pod Limits](#9-node-capacity--pod-limits)
+10. [HPA — Horizontal Pod Autoscaler](#10-hpa--horizontal-pod-autoscaler)
+11. [VPA — Vertical Pod Autoscaler](#11-vpa--vertical-pod-autoscaler)
+12. [Cluster Autoscaler](#12-cluster-autoscaler)
+13. [Karpenter](#13-karpenter)
+14. [KEDA — Event-Driven Autoscaling](#14-keda--event-driven-autoscaling)
+15. [SLI / SLO / Error Budget](#15-sli--slo--error-budget)
+16. [Scaling Best Practices](#16-scaling-best-practices)
 
 ---
 
@@ -41,6 +48,9 @@ Managed node group: EC2 instances in an ASG. You pick instance type. You can SSH
 
 **[S] Your EKS cluster nodes show NotReady right after creation. What do you check first?**
 VPC CNI addon. Nodes boot and join the cluster but can't get pod IPs until CNI is running. If CNI wasn't installed before the node group, nodes come up NotReady. In our Terraform: `depends_on = [aws_eks_addon.vpc_cni]` on the node group — forces CNI to be ready before any node boots.
+
+**[I] `kubectl` says "no such host" right after recreating the cluster. Why?**
+Each new cluster gets a brand-new API server endpoint. The kubeconfig still pointed at the destroyed cluster's DNS name — which no longer resolves. Fix: `aws eks update-kubeconfig --region us-east-2 --name ecom`. Hit this after every destroy/apply cycle — running the kubeconfig update is the first step after `terraform apply` finishes.
 
 ---
 
@@ -195,6 +205,18 @@ kubectl get events -n ecom --sort-by=.lastTimestamp
 ```
 Rejection happens at the Pod level (Deployment → ReplicaSet → Pod). PSA gives the specific profile violation. Kyverno includes policy name, rule name, and the exact field that failed.
 
+**[G] What securityContext fields matter most?**
+Six key fields: `runAsNonRoot: true` (fail if image runs as UID 0), `runAsUser: 999` (specific non-root UID), `allowPrivilegeEscalation: false` (child processes can't gain more privileges than parent — blocks sudo inside the container), `capabilities: drop: [ALL]` (removes all 14 default Linux capabilities), `seccompProfile: RuntimeDefault` (filters ~300 dangerous syscalls via containerd's built-in profile), `readOnlyRootFilesystem: true` (prevents writing to the container filesystem — attacker can't drop and execute a binary). We apply all six to every container in the ecom namespace.
+
+**[G] What Kyverno policies did you implement?**
+Two ClusterPolicies: (1) `require-resource-limits` — every container must declare CPU and memory limits; without limits a noisy pod can starve the whole node. Currently in `Audit` mode (logs violations, doesn't block) — will flip to `Enforce` after all deployments declare limits. (2) `deny-latest-tag` — blocks images tagged `:latest` because it's non-deterministic; forces explicit version or git-SHA tags for reproducible deployments and meaningful rollbacks.
+
+**[I] MySQL pod crashing with `Permission denied` on `/var/lib/mysql` despite `runAsUser: 999`. Why?**
+The EBS volume was previously owned by root (UID 0). When MySQL ran as UID 999, it couldn't write to a root-owned directory. Fix: add `fsGroup: 999` at the pod-level `securityContext`. `fsGroup` tells Kubernetes to `chown` all mounted volumes to that GID before the container starts — runs as a privileged init step before the app process. Also deleted the stale PVC to force a fresh volume with correct ownership from the start.
+
+**[I] Pod crashing with `CreateContainerConfigError`. How did you debug it?**
+`kubectl describe pod mysql-0 -n ecom` → Events showed: secret `mysql-secret` key `mysql-root-password` not found. ESO was writing the key as `mysql-root-password` but the pod's `secretKeyRef` was looking for key `password`. Fixed by changing `secretKey: mysql-root-password` → `secretKey: password` in the ExternalSecret manifest, then force-syncing: `kubectl annotate externalsecret mysql-external-secret -n ecom force-sync=$(date +%s) --overwrite`. The `secretKey` in ExternalSecret is the key name INSIDE the K8s Secret — it must exactly match what `secretKeyRef.key` expects.
+
 ---
 
 ## 6. Storage
@@ -286,3 +308,272 @@ VPC CNI assigns a real VPC IP to each pod from the node's ENIs. t3.medium suppor
 
 **[G] Prefix delegation gives 16× more IPs. Why do you still need a launch template?**
 kubelet's `--max-pods` is baked at node boot time by the EKS bootstrap script — it reads the ENI formula and hardcodes 17. Even if prefix delegation gives 288 IPs available, kubelet refuses to schedule beyond 17 pods because its internal counter says max=17. The launch template overrides `--max-pods` via the AL2023 nodeadm `NodeConfig` spec. You need both changes together: prefix delegation (enough IPs) + launch template (kubelet allowed to use them).
+
+---
+
+## 10. HPA — Horizontal Pod Autoscaler
+
+### Cheat Sheet
+
+| Concept | Key Point |
+|---|---|
+| What it does | Scales pod replica count based on metrics |
+| Requires | metrics-server (for CPU/mem) or custom metrics adapter |
+| Scale-up trigger | Current usage / requested > target threshold |
+| Scale-down delay | Default 5 min stabilisation window — prevents thrashing |
+| Resource requests MUST be set | HPA calculates % usage — without requests, it can't calculate |
+| `minReplicas` / `maxReplicas` | Bounds — HPA never goes below min or above max |
+
+### Questions
+
+**[G] How does HPA decide when to scale up?**
+HPA compares current metric value against the target. For CPU: `desiredReplicas = ceil(currentReplicas × (currentCPU / targetCPU))`. Example: 2 replicas, each using 80% CPU, target is 50% → `ceil(2 × (80/50)) = ceil(3.2) = 4`. Scale to 4 replicas. This is why resource requests must be set — "current CPU" is measured as a percentage of the requested CPU, not the node's total CPU.
+
+**[G] Why does HPA scale down slowly compared to scale up?**
+Scale-down has a stabilisation window (default 5 minutes). HPA waits to see if the load drop is sustained before removing pods. Prevents thrashing: load spikes for 30 seconds, HPA scales up → load drops → HPA immediately scales down → load spikes again. The window absorbs short-lived dips. Scale-up has no delay — responding to load fast is more important than avoiding a few extra pods.
+
+**[S] HPA is configured but pods never scale. `kubectl describe hpa` shows "unable to fetch metrics". Why?**
+metrics-server is not installed. HPA requires metrics-server to get CPU/memory readings from kubelet. Install via `kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml`. Also check: are resource `requests` set on the Deployment? Without requests, metrics-server returns values but HPA can't calculate a percentage → shows 0% utilisation → never scales.
+
+**[G] Walk me through your HPA setup in this project.**
+We have HPA on `product-category` and `order-service` — both stateless services with variable traffic. Both set `minReplicas: 2` (availability — one per AZ), `maxReplicas: 5`, `cpuTargetPercent: 60`. 60% target gives a buffer before the pod is overwhelmed — if we waited until 90%, pods would be CPU-saturated while waiting for scale-up. metrics-server is installed as a Helm release via Terraform (`metrics.tf`). Without it, `kubectl top pods` and HPA both return nothing. In ArgoCD we added `ignoreDifferences` on `/spec/replicas` so ArgoCD doesn't revert HPA's live replica count back to the git value every sync cycle.
+
+**[G] What metrics can HPA scale on?**
+Three types: (1) Resource metrics — CPU and memory as a percentage of requests. Served by metrics-server via `metrics.k8s.io`. Most common. (2) Custom metrics — application-specific metrics like requests-per-second from Prometheus. Served by a custom metrics adapter. (3) External metrics — metrics from outside the cluster: SQS queue depth, Kafka lag, Redis length. Served by an external metrics adapter (KEDA's metrics-apiserver for AWS). CPU-based HPA is fine for request-driven services. For queue-driven workers (notification-worker), external metrics via KEDA give much tighter scaling.
+
+**[S] `kubectl describe hpa` shows `TARGETS: <unknown>/60%`. Pods are running. What's wrong?**
+Resource `requests` are not set on the Deployment's container spec. HPA calculates CPU utilisation as `(current CPU usage) / (requested CPU)`. Without `requests.cpu` set, the denominator is 0 — the API returns `<unknown>`. Fix: add `resources.requests.cpu` and `resources.requests.memory` to every container the HPA targets. This also fixes scheduler bin-packing — without requests, the scheduler doesn't know how much space a pod needs and may overcommit a node.
+
+**[G] Difference between HPA and KEDA.**
+HPA is built into Kubernetes and scales on internal metrics only — CPU and memory from metrics-server, or custom app metrics via a Prometheus adapter. Its minimum replica count is 1 — it cannot scale to zero. KEDA extends HPA: it supports 70+ external event sources (SQS, Kafka, Redis, Cron, etc.), and it can scale to zero by patching the Deployment directly when the queue is empty. Under the hood, KEDA creates and manages its own HPA object for the 1→N path. Think of KEDA as HPA with superpowers: external triggers + scale-to-zero.
+
+---
+
+## 11. VPA — Vertical Pod Autoscaler
+
+### Cheat Sheet
+
+| Mode | Behaviour |
+|---|---|
+| `Off` | Recommends only — shows what requests should be. Doesn't change anything. |
+| `Initial` | Sets requests when pod first starts. Never updates running pods. |
+| `Auto` | Evicts and restarts pods to apply new requests — disruptive. |
+| HPA + VPA conflict | Both on CPU: VPA changes requests → HPA's % calculation changes → feedback loop |
+| Safe combo | HPA on custom metrics (request rate) + VPA on memory only |
+
+### Questions
+
+**[G] VPA vs HPA — when do you use each?**
+HPA: stateless services with variable traffic — add more pods when load increases. VPA: right-sizing pods whose resource usage is predictable but poorly configured — a Java app that always uses 1.5GB RAM but you set 512MB. VPA `Off` mode is genuinely useful just for recommendations — run it for a week on a new service to see what requests should actually be, then set them manually. Never use VPA `Auto` on a service that already has HPA on the same metric.
+
+**[G] Why do VPA and HPA conflict when both use CPU?**
+VPA sees pod uses 100% of its CPU request → VPA increases the request from 200m to 400m. Now pod uses 50% of its request. HPA sees 50% → scales down from 4 pods to 2. Now 2 pods handle the same load → CPU spikes to 100% again → VPA increases request again → HPA scales down again. Loop. Safe pattern: HPA on request rate (from Prometheus), VPA on memory only. They don't touch the same metric.
+
+---
+
+## 12. Cluster Autoscaler
+
+### Cheat Sheet
+
+| Concept | Key Point |
+|---|---|
+| What it does | Adds/removes EC2 nodes by calling ASG `SetDesiredCapacity` |
+| Scale-up trigger | Pod in `Pending` state — scheduler couldn't place it |
+| Scale-down trigger | Node underutilised for 10+ min AND all pods fit on other nodes |
+| ASG discovery | Two tags on node group: `k8s.io/cluster-autoscaler/enabled=true` + `k8s.io/cluster-autoscaler/<cluster-name>=owned` |
+| What CA polls | Kubernetes API for Pending pods (~every 10s) and node utilisation |
+| IRSA SA name pitfall | Helm chart creates `<release>-aws-cluster-autoscaler` by default — trust policy `:sub` must match exactly or `AccessDenied` |
+| node_max_size must be raised | CA cannot scale beyond `max_size` on the ASG — default 2 means CA is silently capped |
+| Slower than Karpenter | Must wait for ASG to launch EC2, node to boot and join. ~2-5 min. |
+| topologySpreadConstraints | Can keep pods Pending even after a node is added (wrong AZ) — CA is not at fault |
+
+### Questions
+
+**[G] How does Cluster Autoscaler know which node group to scale?**
+It scans every ASG in the account for two tags: `k8s.io/cluster-autoscaler/enabled=true` and `k8s.io/cluster-autoscaler/<cluster-name>=owned`. Without both tags the ASG is invisible to CA — it silently does nothing even when pods are Pending. Once it finds the tagged ASG, it simulates whether adding one node of that type would make the Pending pods schedulable (checking resource requests, node selectors, tolerations, topology constraints). If yes, it calls `SetDesiredCapacity +1`.
+
+**[G] Cluster Autoscaler vs Karpenter — key difference?**
+CA works with existing fixed node groups (ASGs) — picks which pre-defined group to scale, calls `SetDesiredCapacity`, waits for ASG to launch EC2. Slow — 2-5 min for a new node. Karpenter bypasses ASG entirely: it bin-packs pending pods, picks the exact right instance type for those specific pods, and calls `ec2:RunInstances` directly. Faster — ~30-60s for a new node. Karpenter also does active consolidation: if 3 half-full nodes can fit on 2, it drains and terminates one. CA never does consolidation proactively.
+
+**[S] CA pod is Running but pods stay Pending and no new node appears. What do you check?**
+In order: (1) `kubectl logs -n kube-system -l app.kubernetes.io/name=aws-cluster-autoscaler` — CA logs its reason for not scaling. (2) Missing ASG discovery tags — CA's first log line on startup lists the ASGs it found. If empty, tags are wrong or missing. (3) `node_max_size` — if current node count equals max_size, CA logs "node group at max size". (4) IRSA error — `AccessDenied on sts:AssumeRoleWithWebIdentity` means CA can't call the ASG API at all. (5) topologySpreadConstraints — pod may require an AZ that the node group doesn't cover; CA found the group but adding a node there won't help.
+
+**[S] CA is installed but shows `AccessDenied: Not authorized to perform sts:AssumeRoleWithWebIdentity`. Root cause?**
+IRSA trust policy `:sub` condition doesn't match the actual service account name. The Helm chart for cluster-autoscaler auto-generates the SA name as `<release-name>-aws-cluster-autoscaler`. If the trust policy was written for `cluster-autoscaler` (bare name), the token the pod presents has subject `system:serviceaccount:kube-system:cluster-autoscaler-aws-cluster-autoscaler` — a mismatch → AccessDenied. Fix: either set `rbac.serviceAccount.name=cluster-autoscaler` in the Helm values to force the short name, or update the trust policy `:sub` to match the generated name. We hit this exact issue — fixed by setting `rbac.serviceAccount.name` in `cluster-autoscaler.tf`.
+
+**[I] You scale a Deployment to 20 replicas as a test. New nodes appear but then the HPA pulls the count back down to 5. CA then removes the nodes. Is this expected?**
+Yes. HPA `maxReplicas: 5` is a hard ceiling — it overrides any manual `kubectl scale` immediately. The sequence: manual scale to 20 → HPA caps at 5 → a few pods go Pending briefly → CA adds nodes → HPA settles at 5 → extra nodes become idle → CA detects underutilisation after 10 min cooldown → calls `SetDesiredCapacity` back down → nodes terminate. All three (manual scale, HPA, CA) are acting correctly. The CA scale-down cooldown exists specifically to avoid thrashing on temporary spikes — it waits 10 min of sustained underutilisation before removing a node.
+
+**[G] Walk me through your Cluster Autoscaler setup — how did you install it and what did you configure?**
+Three changes in Terraform: (1) `variables.tf` — raised `node_max_size` from 2 to 5. Without this CA is silently capped at the current node count. (2) `eks.tf` — added two discovery tags to the node group: `k8s.io/cluster-autoscaler/enabled=true` and `k8s.io/cluster-autoscaler/ecom=owned`. EKS propagates these to the underlying ASG so CA can find it. (3) New `cluster-autoscaler.tf` — IRSA role (trust policy scoped to `kube-system:cluster-autoscaler` SA only) + IAM policy with `autoscaling:SetDesiredCapacity` and `autoscaling:TerminateInstanceInAutoScalingGroup` + Helm release of `kubernetes/autoscaler` chart v9.46.6 in `kube-system`. One pitfall we hit: the Helm chart generates the SA name as `<release>-aws-cluster-autoscaler` by default, which didn't match our trust policy — fixed by setting `rbac.serviceAccount.name=cluster-autoscaler` in the Helm values.
+
+**[G] How does Cluster Autoscaler respect PodDisruptionBudgets during scale-down?**
+Before draining a node for scale-down, CA simulates the eviction of every pod on that node. If evicting a pod would violate its PDB (e.g. PDB says `minAvailable: 1` and it's the last pod), CA skips that node and tries another. This is why PDB is critical before enabling CA — without it, CA can drain the last replica of a service causing downtime. In our project, product-category and order-service both run 2 replicas across 2 AZs with `topologySpreadConstraints`, so CA can safely drain one node while the other AZ's pod stays up.
+
+**[S] CA is trying to scale down but nodes stay for hours. `kubectl describe node` shows pods blocked from eviction. Why?**
+A PDB is blocking it. CA simulates eviction — if any pod has a PDB that would be violated, CA will not drain that node. Check: `kubectl get pdb -A` to see all PDBs and their `ALLOWED DISRUPTIONS` column. If it shows `0`, that PDB is blocking all evictions right now. Either the service has too few replicas (fix: scale up first), or the PDB is misconfigured (e.g. `maxUnavailable: 0` with `minAvailable` equal to current replica count). Also check for pods with `cluster-autoscaler.kubernetes.io/safe-to-evict: "false"` annotation — CA skips those nodes entirely.
+
+**[G] How do you reduce cloud infrastructure costs using Cluster Autoscaler?**
+CA removes underutilised nodes automatically — no manual cleanup. In practice: set `node_min_size` to the minimum needed for production stability (not 0 — cold start on all traffic would be catastrophic), and `node_max_size` to the burst ceiling. Then let CA handle the middle. Additional levers: (1) Use spot instances for non-critical workloads — CA works with mixed ASGs. (2) Set resource requests accurately — overprovisioned requests waste node capacity and trigger unnecessary CA scale-up. (3) PDB ensures CA can actually do the scale-down. Without PDB awareness, CA might add nodes but never remove them because it can't safely drain.
+
+---
+
+## 13. Karpenter
+
+### Cheat Sheet
+
+| Concept | Key Point |
+|---|---|
+| NodePool CRD | What workloads Karpenter accepts — instance families, capacity type (spot/OD), AZs, limits |
+| EC2NodeClass CRD | HOW to build the EC2 — AMI, subnets, security groups, IAM instance profile |
+| Bypass ASG | Calls `ec2:RunInstances` directly — no ASG in the path. ~30-60s vs CA's 2-5 min |
+| Bin-packing | Looks at ALL pending pods together, picks the one instance type that fits them cheapest |
+| Consolidation | After pods leave, merges underutilised nodes — drains + terminates. CA never does this |
+| System node group stays | Karpenter manages APP nodes. System pods (kube-system) stay on the existing managed node group |
+| Taint required | `NO_SCHEDULE` taint on system node group pushes app pods onto Karpenter nodes |
+| Subnet/SG discovery | Karpenter finds subnets and security groups by tag: `karpenter.sh/discovery=<cluster-name>` |
+| Spot interruption | SQS queue + EventBridge rule — 2-min warning from EC2 → Karpenter drains the node gracefully |
+| karpenter-node IAM role | Separate from cluster node role — nodes Karpenter creates need their own instance profile |
+
+### Questions
+
+**[G] What is the fundamental difference between how CA and Karpenter launch nodes?**
+CA calls `autoscaling:SetDesiredCapacity` on an existing ASG. AWS then launches the EC2, it boots, installs the agent, joins the cluster — 2-5 minutes total. Karpenter calls `ec2:RunInstances` directly. It picked the exact instance type by bin-packing pending pods, passes the nodeadm bootstrap config inline, and the node joins in ~30-60 seconds. CA is constrained to whatever node group types you pre-defined. Karpenter can use any instance type in the NodePool — it picks the cheapest one that fits the pods.
+
+**[G] Why do you keep the existing managed node group when adding Karpenter?**
+The existing node group runs system pods: CoreDNS, KEDA, metrics-server, Karpenter itself. These need stable, always-on ON_DEMAND nodes that Karpenter never touches. If Karpenter ran on Karpenter-managed nodes, it could theoretically drain and terminate the node its own pod is on. The split: taint the system node group with `NO_SCHEDULE` (app pods avoid it) + Karpenter creates separate nodes for app pods. Two tiers: stable system tier + dynamic app tier.
+
+**[G] What is consolidation in Karpenter and why doesn't CA do it?**
+Consolidation: after traffic drops, you have 3 nodes each at 30% utilisation. Karpenter calculates they can all fit on 2 nodes → it cordons one node, drains its pods (they reschedule onto the other two), then terminates the EC2. Pure cost saving with zero manual work. CA only scales down nodes that are completely empty (no pods other than daemonsets/mirror pods) for 10+ consecutive minutes. It never moves pods to consolidate. Karpenter's `WhenEmptyOrUnderutilized` consolidation policy is a major operational advantage.
+
+**[S] Karpenter-provisioned spot node gets a 2-minute termination warning from EC2. What happens?**
+AWS publishes a spot interruption notice to EventBridge → EventBridge forwards it to the Karpenter SQS queue → Karpenter's operator pod reads the message → it cordons the node (no new pods scheduled) → drains it (sends SIGTERM to pods, respects PDB, waits for graceful shutdown) → pods reschedule onto other nodes → EC2 terminates. The 2-minute window is enough for graceful shutdown if pods have a low `terminationGracePeriodSeconds`. Without the SQS queue wired up, Karpenter doesn't get the warning — EC2 yanks the node mid-request.
+
+**[G] Difference between NodePool and EC2NodeClass in Karpenter.**
+NodePool = the WHAT and the policy. It defines what workloads Karpenter accepts (instance families, capacity type spot/on-demand, AZs), the min/max replica limits (CPU ceiling so costs don't spiral), and the consolidation policy. EC2NodeClass = the HOW on AWS. It defines the AMI to use, which subnets to launch into, which security group to attach, and the IAM instance profile for the node. The split exists so you can have multiple NodePools (one for spot, one for on-demand, one for GPU) all sharing one EC2NodeClass — you change the AMI once in EC2NodeClass and all NodePools pick it up.
+
+**[G] How do you use spot instances safely with Karpenter?**
+In the NodePool, set `capacity-type: ["spot", "on-demand"]` and list multiple instance families: `["t3.medium", "t3.large", "t3a.medium", "t3a.large"]`. Karpenter tries spot first (70% cheaper) and falls back to on-demand automatically if spot capacity is unavailable. The SQS interruption queue handles the 2-minute warning — Karpenter drains gracefully before AWS terminates. Rule: never run stateful workloads (databases) on spot — only stateless services where a pod restart is safe. In our project, notification-worker is a perfect spot candidate: stateless, processes SQS messages, graceful shutdown.
+
+**[S] Karpenter pod is Running but pods remain Pending and no new nodes appear.**
+Check in order: (1) `kubectl describe pod <pending-pod>` — what does the scheduler say? If it says "0 nodes available", the NodePool constraints might be too tight (wrong instance type, AZ not available for spot). (2) `kubectl get nodepool` — check the NodePool's `READY` status. (3) Subnet and SG tags — Karpenter finds subnets by `karpenter.sh/discovery=<cluster-name>` tag. If subnets aren't tagged, Karpenter can't find where to launch. (4) IAM — `kubectl logs -n kube-system -l app.kubernetes.io/name=karpenter` — `AccessDenied on ec2:RunInstances` means the IRSA role is missing EC2 permissions. (5) EC2NodeClass `Ready` status — if the AMI alias doesn't resolve (e.g. `al2023@latest` in a region with no AL2023 AMI), EC2NodeClass shows NotReady.
+
+**[G] How would you design autoscaling for a high-traffic e-commerce platform on EKS?**
+Three layers: (1) Pod-level: HPA on CPU for stateless services (product, order, frontend) — scales within the existing nodes. KEDA on SQS depth for async workers (notification, email) — scale to zero between traffic peaks, burst during flash sales. (2) Node-level: Karpenter for app nodes — spot instances for 70% cost saving, fast ~60s provisioning for flash sale spikes, consolidation to remove idle nodes overnight. System node group stays ON_DEMAND for stability. (3) Config: PDB on every service (min 1 replica always available), `topologySpreadConstraints` across AZs so a node loss doesn't kill a service, resource requests set accurately so scheduler bin-packing and HPA work correctly. The result: infrastructure scales automatically from overnight maintenance window (minimal nodes) to Black Friday traffic (many nodes) without manual intervention.
+
+---
+
+## 14. KEDA — Event-Driven Autoscaling
+
+### Cheat Sheet
+
+| Concept | Key Point |
+|---|---|
+| What it does | Scales pods based on external event sources — not CPU/memory |
+| ScaledObject CRD | Defines trigger source, min/max replicas, cooldownPeriod |
+| TriggerAuthentication CRD | How KEDA authenticates with the external system (IRSA for AWS) |
+| Scale to zero | HPA `minReplicas` hard floor is 1. KEDA patches Deployment directly to go to/from 0 |
+| Two-path scaling | 0→1 and queue-empty→0: keda-operator patches Deployment directly. 1→N: keda creates an HPA backed by external metric |
+| Three pods | `keda-operator` (brain, polls SQS), `keda-metrics-apiserver` (answers HPA metric queries), `keda-admission-webhooks` (validates ScaledObject YAML) |
+| Metric name format | Auto-generated: `s{index}-{trigger-type}-{queue-name}` e.g. `s0-aws-sqs-order-events` |
+| API routing | HPA type=Resource → `metrics.k8s.io` (metrics-server). HPA type=External → `external.metrics.k8s.io` (keda-metrics-apiserver) |
+| identityOwner: operator | KEDA operator's IRSA role calls `sqs:GetQueueAttributes` — no notification-worker pod needed. Safe at scale-to-zero |
+| cooldownPeriod | Seconds KEDA waits after queue empties before scaling to 0. Prevents cold-start thrash on burst traffic |
+| gRPC bridge | HPA calls keda-metrics-apiserver via REST → keda-metrics-apiserver calls keda-operator via gRPC :9666 → operator returns live SQS depth |
+
+### Questions
+
+**[G] What is KEDA and when does HPA not work?**
+KEDA (Kubernetes Event-Driven Autoscaling) scales pods based on external event sources — SQS queue depth, Kafka consumer lag, Redis list length. HPA works on CPU/memory — internal metrics. A notification worker that processes SQS messages: when the queue is empty it should have 0 pods, when it has 10,000 messages it needs 50 pods. CPU doesn't reflect this — the worker might be idle (low CPU) while messages pile up. KEDA reads the SQS queue depth directly and scales accordingly.
+
+**[G] Why can't HPA scale to zero, and how does KEDA solve it?**
+HPA has a hard-coded minimum of 1 replica — it's a Kubernetes API constraint, not a config option. It's designed for always-on services where 0 replicas would mean a cold start on every request. KEDA solves this by bypassing HPA entirely for the 0↔1 transition: it patches `spec.replicas` on the Deployment directly via the Kubernetes API. For 1→N scaling, KEDA creates an HPA object internally (you see `keda-hpa-<name>`) and feeds it external metrics. So KEDA is not replacing HPA — it's layered on top: HPA handles 1→N, KEDA handles the 0 boundary.
+
+**[G] Explain KEDA's three pods and what each one does.**
+`keda-operator`: the brain. Runs a control loop that polls SQS `GetQueueAttributes` every ~30s. Owns the ScaledObject reconciler. When queue depth crosses the threshold, directly patches the Deployment. `keda-operator-metrics-apiserver`: a Kubernetes aggregated API server that registers at `external.metrics.k8s.io`. When the HPA needs to evaluate whether to scale from 1 to N, it calls this server with a metric name (e.g. `s0-aws-sqs-order-events`). This server calls keda-operator via gRPC on port 9666 to get the live SQS depth, then returns it to HPA. `keda-admission-webhooks`: a validating admission webhook that catches malformed ScaledObject YAML at `kubectl apply` time before it creates bad state in the cluster.
+
+**[G] When HPA needs the current SQS queue depth, what is the full call path?**
+HPA controller (in kube-system, part of control plane) → HTTPS REST to Kubernetes API server → API server routes to `external.metrics.k8s.io` registered endpoint → that endpoint is `keda-metrics-apiserver` pod → it calls `keda-operator` pod via gRPC on port 9666 → keda-operator returns the cached SQS `ApproximateNumberOfMessages` value → keda-metrics-apiserver returns it to the API server → API server returns it to HPA → HPA does `ceil(depth / queueLength)` to compute desired replicas.
+
+**[S] KEDA ScaledObject shows READY=False. `kubectl describe scaledobject` shows `unable to get queue attributes: AccessDenied`. What's wrong?**
+IRSA not wired. Either: (1) TriggerAuthentication is missing `podIdentity.provider: aws` — KEDA is trying to use anonymous credentials. (2) The `keda-operator` ServiceAccount in kube-system has no `eks.amazonaws.com/role-arn` annotation — the role ARN wasn't passed via Helm `serviceAccount.operator.annotations`. (3) The IAM role's trust policy has the wrong OIDC conditions — wrong `:sub` value (namespace or SA name mismatch). (4) The IAM policy allows `sqs:GetQueueAttributes` but on the wrong resource ARN. Check in that order.
+
+**[S] notification-worker stays at 0 replicas even when the SQS queue has 50 messages. What do you check?**
+(1) `kubectl get scaledobject -n ecom` — is READY=True? If False, KEDA itself is misconfigured (IRSA/auth issue). (2) `kubectl describe scaledobject notification-worker-scaledobject -n ecom` — look at the `Conditions` block and `Active` status. (3) `kubectl get hpa -n ecom` — KEDA should have created `keda-hpa-notification-worker`. If the HPA doesn't exist, ScaledObject never reached Ready state. (4) Check `identityOwner: operator` in the ScaledObject trigger metadata — if it's missing or set to `pod`, KEDA tries to use the notification-worker pod's IRSA role, but at 0 replicas there is no pod → chicken-and-egg → never scales up.
+
+**[G] What is `cooldownPeriod` in a ScaledObject and why does it matter for SQS?**
+After the queue drains to 0 messages, KEDA waits `cooldownPeriod` seconds before setting replicas to 0. Without it: a burst of 5 messages arrives → KEDA scales to 1 → worker processes them → queue empty → KEDA immediately scales to 0 → next 5 messages arrive → cold start (30-60s pull new image, JVM warmup) → latency spike. With `cooldownPeriod: 30`: KEDA waits 30s after queue empties before scaling down. Small bursts are absorbed within that window — the worker is already warm when the next batch arrives. Set it based on how frequently your producer sends batches.
+
+**[G] How does KEDA integrate with MSK (Managed Kafka) when direct Kafka auth isn't possible?**
+KEDA's built-in Kafka scaler uses a Go Kafka client that historically couldn't do AWS IAM auth (SASL/OAUTHBEARER for MSK). Pattern: MSK publishes `SumOffsetLag` to CloudWatch → deploy `k8s-cloudwatch-adapter` → adapter reads the CloudWatch metric and exposes it as an external metric in the cluster → KEDA uses a `cloudwatch` scaler type to read it. Benefits: (1) no direct connection to MSK brokers needed (no security group changes), (2) CloudWatch metric is already aggregated across all partitions, (3) same IRSA pattern as all other AWS-calling pods.
+
+**[I] A KEDA-scaled worker stays at 0. You place a test order. Worker spins up, processes it, scales back to 0. But the original order that triggered scale-up is processed twice — once by the scale-up pod and once 10 minutes later by a new pod. Why?**
+Message visibility timeout. When the first pod received the message, it started processing but didn't delete it before the visibility timeout expired (default: 30s for SQS, configurable). SQS made the message visible again → second pod picked it up. Fix: either increase `VisibilityTimeout` on the queue to be longer than the slowest possible processing time, or delete the message immediately after successful processing (use `AUTO` ack mode — which is what `ON_SUCCESS` does in Spring Cloud AWS). We hit a variant of this during notification-worker debugging — switched to `ON_SUCCESS` auto-ack.
+
+**[G] Walk me through your KEDA setup in this project.**
+KEDA scales our `notification-worker` to 0 when the `order-events` SQS queue is empty, and up to 5 replicas at peak. Four pieces: (1) `terraform/keda.tf` — IRSA role for `kube-system:keda-operator` SA with `sqs:GetQueueAttributes` permission, plus Helm release of `kedacore/keda` chart v2.16.0. (2) `helm/ecom/templates/notification-worker-triggerauth.yaml` — `TriggerAuthentication` with `podIdentity.provider: aws` telling KEDA to use the operator's IRSA role, not static credentials. (3) `helm/ecom/templates/notification-worker-scaledobject.yaml` — `ScaledObject` pointing at the SQS queue, `queueLength: 5` (one replica per 5 messages), `minReplicaCount: 0`, `cooldownPeriod: 30s`. (4) `GitOps/apps/ecom-dev.yaml` — `ignoreDifferences` on `notification-worker`'s `/spec/replicas` so ArgoCD doesn't revert KEDA's 0-replica state back to 1 every sync cycle.
+
+**[G] Why does ArgoCD need `ignoreDifferences` when KEDA is installed?**
+ArgoCD compares live cluster state to git. In git, `notificationWorker.replicaCount: 1`. KEDA sets `spec.replicas: 0` when the queue is empty. ArgoCD sees "live=0, git=1" → marks the app OutOfSync → `selfHeal: true` kicks in → ArgoCD applies the Helm chart → replica count goes back to 1. This fights KEDA on every sync cycle. `ignoreDifferences` on `/spec/replicas` for the notification-worker deployment tells ArgoCD: "I know this field will differ, that's intentional — don't touch it." Same applies to product-category and order-service: HPA sets live replicas to 3 while git says 2 — without `ignoreDifferences`, ArgoCD would undo the HPA's work.
+
+**[G] What happens to a KEDA-scaled deployment when KEDA itself crashes?**
+The last HPA that KEDA created stays in place. HPA continues scaling between 1 and maxReplicas using the last known metric value. But: (1) scale-to-zero stops working — no KEDA operator means nobody patches `spec.replicas` to 0. (2) No new metric reads — the HPA will eventually show `<unknown>` for the external metric and stop scaling altogether. (3) ArgoCD may now resync and revert replicas to the git value since KEDA is no longer managing it. Fix: monitor KEDA's own pods via alerts on `kube-system` pod restarts. KEDA being down is a silent scaling failure — traffic still flows but you're paying for idle workers.
+
+**[S] How do you implement zero-downtime scaling in Kubernetes?**
+Four requirements working together: (1) Readiness probe — HPA only routes traffic to pods that pass the readiness check. A new pod that hasn't finished startup doesn't receive traffic yet. (2) `minReplicas ≥ 2` — HPA never scales below 2, so there's always at least one pod serving traffic while another starts. (3) PDB — prevents CA/Karpenter from draining the last pod during node scale-down. (4) `terminationGracePeriodSeconds` — gives pods time to finish in-flight requests before being killed (default 30s — set higher for slow request processing). Miss any one of these and you get 502s during scaling events.
+
+---
+
+## 15. SLI / SLO / Error Budget
+
+### Cheat Sheet
+
+| Term | Definition | Example |
+|---|---|---|
+| SLI | Metric measuring service behaviour | 99.2% of requests returned 2xx this month |
+| SLO | Internal target for an SLI | 99.9% availability |
+| SLA | Contractual floor signed with customers | 99.5% — always lower than SLO |
+| Error budget | Allowed downtime = (1 - SLO) × period | 99.9% SLO = 43.2 min/month |
+| Budget burn | Incidents consuming the error budget | 1 bad deploy = 8 min = 18% of monthly budget |
+
+### Questions
+
+**[G] What is an error budget and how does it change the dev vs ops dynamic?**
+Error budget = (1 - SLO) × time period. At 99.9% monthly SLO: 43.2 minutes of downtime allowed. While budget is healthy: ship features fast, take risks. When budget burns fast (>50% gone in 2 weeks): pause features, do a reliability sprint. It removes the ops-vs-dev argument — the budget is the referee. Dev team's features burn the budget when they cause incidents, so they have direct incentive to write reliable code. Reliability becomes a shared engineering problem, not just ops' problem.
+
+**[S] A team burned 80% of their monthly error budget in the first week. What happens next?**
+Feature work pauses — reliability sprint kicks in. Root cause every incident that burned budget: bad deploy (missing canary? no PDB? failing readiness probe?). Fix the gaps. Run chaos engineering to validate. Only resume feature work once budget is restored. The error budget makes this a data-driven decision — not a heated ops-vs-dev meeting.
+
+---
+
+## 16. Scaling Best Practices
+
+### Cheat Sheet
+
+| Practice | Why |
+|---|---|
+| Set resource requests on all pods | Required for HPA, required for scheduler bin-packing |
+| PDB before enabling autoscaling | CA scale-down respects PDB — won't evict the last pod |
+| Readiness probe before enabling HPA | Pod must be actually ready before receiving scaled traffic |
+| topologySpreadConstraints with HPA | Ensures scaled replicas spread across AZs, not pile up in one |
+| Scale-down stabilisation window | Prevents rapid scale-up → scale-down thrash on variable load |
+
+### Questions
+
+**[G] What happens if you enable HPA without resource requests?**
+HPA uses the formula: `desiredReplicas = ceil(currentReplicas × (currentUsage / targetUsage))`. "currentUsage" is expressed as a percentage of the requested resources. With no requests set: the API returns `<unknown>` for utilisation — HPA shows 0% CPU and never scales, or throws errors. The Deployment also doesn't benefit from scheduler bin-packing, and Cluster Autoscaler can't calculate whether adding a node would help. Resource requests are the foundation — everything else (HPA, CA, scheduler) depends on them.
+
+**[G] How do you handle sudden traffic spikes in Kubernetes?**
+Multiple layers fire in sequence: (1) Existing pods absorb the spike via CPU bursting (t3.medium is burstable). (2) Within seconds, HPA detects CPU > 60% target → scales pod count up to maxReplicas (5). (3) If new pods can't fit on existing nodes, they go Pending → CA/Karpenter adds a node within 1-3 minutes (Karpenter faster). (4) KEDA fires in parallel for queue-backed workers — queue depth rises → KEDA scales notification-worker from 0 to N immediately. Prep: readiness probes ensure traffic only hits ready pods, PDB ensures no downtime during the scaling event, and `topologySpreadConstraints` ensures new replicas spread across AZs rather than piling up on one node.
+
+**[G] How do you reduce Kubernetes cloud costs without affecting availability?**
+Five levers: (1) KEDA scale-to-zero for async workers — notification-worker runs 0 pods overnight when no orders come in. (2) Karpenter consolidation — merges underutilised nodes actively, removes half-empty nodes that CA would leave. (3) Spot instances for non-critical workloads — 70% cheaper, Karpenter handles spot interruptions gracefully. (4) Accurate resource requests — overprovisioned requests waste slot capacity and trigger unnecessary CA scale-up. Use VPA Off-mode to get recommendations. (5) `minReplicas: 2` not 3 — you need ≥ 2 for AZ redundancy, but 3 burns an extra pod 24/7. Let HPA handle the peak.
+
+**[G] Difference between horizontal and vertical scaling. When do you use each in Kubernetes?**
+Horizontal scaling (HPA): add more pod replicas — share the load across many pods. No downtime, works for stateless services. Vertical scaling (VPA): give each pod more CPU/memory — one bigger pod instead of more pods. Requires pod restart in `Auto` mode — brief disruption. Use HPA for: stateless services (product-svc, order-svc), anything with variable traffic. Use VPA recommendations (Off mode) for: right-sizing initial requests on any service, especially JVM apps that consistently use more memory than requested. VPA Auto mode in production: only for batch jobs or low-traffic services where a restart is acceptable.
+
+**[G] What is the difference between a liveness probe and readiness probe in the context of autoscaling?**
+Readiness probe: "is this pod ready to receive traffic?" HPA and Services both respect it — a pod fails readiness → removed from Service endpoints → no traffic → HPA doesn't count it toward utilisation. Critical during scale-up: a new pod that's still warming up doesn't get flooded with traffic before it's ready. Liveness probe: "is this pod alive?" If it fails, kubelet kills and restarts the pod. Not directly tied to scaling — it's crash recovery. Common mistake: making readiness probe too fast. A Spring Boot app that takes 30s to start fails readiness immediately → HPA sees a pod at 0% → may not scale up enough.
+
+**[I] Walk me through a production incident where autoscaling failed and caused downtime.**
+During a flash sale, product-category HPA hit `maxReplicas: 5` — couldn't scale further. New pods went Pending. CA saw Pending pods → tried to add a node. But `node_max_size` was still 2 in Terraform from before task #26a. CA logged "node group at max size" and did nothing. Pods sat Pending for 8 minutes — during which requests were queued or dropped → latency spike → users saw 504s. Fix applied: raised `node_max_size` to 5 in `variables.tf` + re-ran terraform apply. Lesson: HPA `maxReplicas` and CA `node_max_size` must be sized together. Scaling one without the other creates a silent ceiling.

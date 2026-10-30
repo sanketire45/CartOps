@@ -10,17 +10,14 @@
 
 | # | Topic | File | Sections Covered |
 |---|---|---|---|
-| 01 | Kubernetes Core | [01-kubernetes-core.md](01-kubernetes-core.md) | ✅ Cluster arch, Pods, Scheduling, **Reliability**, **Security**, **Storage**, RBAC, Node capacity |
-| 02 | K8s Security (redirect) | [02-security.md](02-security.md) | → merged into 01 |
+| 01 | Kubernetes Core | [01-kubernetes-core.md](01-kubernetes-core.md) | ✅ Cluster arch, Pods, Scheduling, Reliability, Security (6 layers), Storage, RBAC, Node capacity, HPA, VPA, CA, Karpenter, KEDA, SLI/SLO, Scaling best practices |
 | 03 | Terraform & IaC | [03-terraform-iac.md](03-terraform-iac.md) | ✅ data vs resource, state, lifecycle, Helm releases, destroy patterns |
-| 04 | Docker & Containers | [04-docker-containers.md](04-docker-containers.md) | 🔨 in progress |
-| 05 | CI/CD & Jenkins | [05-cicd-jenkins.md](05-cicd-jenkins.md) | 🔨 in progress |
-| 06 | GitOps & ArgoCD | [06-gitops-argocd.md](06-gitops-argocd.md) | 🔨 in progress |
+| 04 | Docker & Containers | [04-docker-containers.md](04-docker-containers.md) | ✅ multi-stage, layer caching, non-root, socket security, CRI/OCI |
+| 05 | CI/CD & Jenkins | [05-cicd-jenkins.md](05-cicd-jenkins.md) | ✅ pipeline, quality gates, Docker build in CI, secrets, CI vs CD split |
+| 06 | GitOps & ArgoCD | [06-gitops-argocd.md](06-gitops-argocd.md) | ✅ fundamentals, architecture, sync strategies, drift, Helm, Flux comparison |
 | 07 | AWS (Well-Architected) | [07-aws-services.md](07-aws-services.md) | ✅ Security, Reliability, Performance, Cost, Operational Excellence |
-| 08 | Networking | [08-networking.md](08-networking.md) | ✅ VPC CNI, ENI formula, prefix delegation, NetworkPolicy |
-| 09 | Scaling & Autoscaling | [09-scaling.md](09-scaling.md) | ⏳ fill when HPA + CA done |
-| 10 | Observability | [10-observability.md](10-observability.md) | ⏳ fill when Prometheus + Loki done |
-| 11 | Storage (redirect) | [11-storage.md](11-storage.md) | → merged into 01 |
+| 08 | Networking | [08-networking.md](08-networking.md) | ✅ VPC CNI, ENI, prefix delegation, Services, Ingress, NetworkPolicy, DNS, VPC, war stories |
+| 09 | Observability | [10-observability.md](10-observability.md) | ⏳ fill when Prometheus + Loki done |
 
 ---
 
@@ -77,8 +74,8 @@ Secrets, IRSA, securityContext, PSA, Kyverno, NetworkPolicy, Falco, RBAC
 ### Phase 4 — Reliability ✅ (all in 01 § Reliability)
 Replicas, anti-affinity, topologySpreadConstraints, PDB, readiness probes, graceful shutdown, rolling update
 
-### Phase 5 — Scaling ⏳
-HPA, Cluster Autoscaler, Karpenter, KEDA → fill 09-scaling.md when implemented
+### Phase 5 — Scaling ✅
+HPA, KEDA (#25 done), Cluster Autoscaler (#26a done) → sections 10-16 in 01-kubernetes-core.md. Karpenter (#26b) pending.
 
 ### Observability ⏳
 Prometheus, Grafana, Loki, Alertmanager, SLI/SLO → fill 10-observability.md when implemented
