@@ -174,3 +174,42 @@ AWS releases new EKS-optimised AMIs every few weeks with security patches. A har
 
 **[G] IaC vs ClickOps — what's the real business argument for IaC?**
 Three things ClickOps can't do: (1) Reproducibility — spin up an identical environment in minutes for staging, DR, new region. (2) Auditability — every change is a Git commit with author, timestamp, and reason. (3) Drift detection — `terraform plan` shows if someone changed something in the console. ClickOps is invisible, unrepeatable, and unauditable. In a Dublin DevOps interview: "I can recreate our entire EKS cluster from scratch in 20 minutes with one command."
+
+---
+
+## 8. Multi-region & Multi-account Patterns
+
+### Cheat Sheet
+
+| Pattern | Key Point |
+|---|---|
+| Separate directories per account+region | Industry standard — each dir has its own state file, provider config, backend. Zero cross-account blast radius. |
+| Provider aliases | Valid for small setups — single state file manages resources in multiple accounts/regions. Fragile at scale. |
+| Backend block limitation | Backend block is evaluated BEFORE variables — you CANNOT use `var.region` in a backend block. |
+| `-backend-config` flag | Workaround — pass backend values at `terraform init` time: `terraform init -backend-config="bucket=my-state-bucket"` |
+| `assume_role` in provider | CAN use variables — `provider "aws" { assume_role { role_arn = var.role_arn } }` |
+| Terragrunt | DRY wrapper for Terraform — defines backend and provider once, generates per-env config. Used at scale. |
+| State isolation | Dev destroy should NEVER touch prod state — separate state files + separate AWS accounts enforces this |
+
+### Questions
+
+**[G] How do you manage Terraform for multiple AWS accounts and regions in industry?**
+Industry standard: one directory per account+region combination, each with its own state file in S3. For a `dev` account in `us-east-2` and a `prod` account in `eu-west-1`, you'd have `terraform/dev/` and `terraform/prod/` — each with its own `backend.tf`, `provider.tf`, and `variables.tf`. You switch by changing directory: `cd terraform/dev && terraform apply`. State files are completely isolated — destroying dev cannot touch prod. For DRY: Terragrunt wraps the directories and generates the shared boilerplate (backend, provider) from a root `terragrunt.hcl`.
+
+**[G] Why can't you use a variable in the Terraform backend block?**
+The backend block is evaluated during `terraform init`, which runs before variables are loaded. Terraform has a two-phase initialization — first it reads the backend config (to find the state), then it loads the rest of the config including variables. If `var.region` could appear in the backend block, Terraform would have a chicken-and-egg problem: it can't load vars without state, and can't find state without vars. Workaround: use `-backend-config` flag at init time — `terraform init -backend-config="bucket=my-state-bucket" -backend-config="key=dev/terraform.tfstate"`.
+
+**[TF] Can you use provider aliases to manage multiple AWS accounts in one Terraform config?**
+Yes — you can define multiple provider blocks with aliases: `provider "aws" { alias = "prod"; assume_role { role_arn = "arn:aws:iam::PROD_ACCT:role/TerraformRole" } }`. Resources then reference `provider = aws.prod`. But this pattern has a problem: all resources from all accounts live in one state file. A `terraform destroy` on the wrong workspace nukes everything. It also mixes IAM permissions across accounts in one execution context. Separate directories is safer — each directory assumes its own role, has its own state, and can be destroyed independently.
+
+**[TF] Explain your Terraform module structure for multiple environments.**
+Our project uses separate top-level directories for dev and prod (we have one — `terraform/` for dev). Each environment has: `main.tf` (module calls), `variables.tf` (env-specific values), `backend.tf` (S3 state key scoped to env), `provider.tf` (assume_role ARN for that account). Shared modules live in `modules/` (e.g. `modules/eks-cluster`, `modules/ecr-repos`). Dev and prod both call the same modules with different variable values. Prod has `prevent_destroy = true` on RDS — dev doesn't. This structure means: (1) a dev `terraform destroy` cannot reach prod state (different S3 key + different IAM role). (2) Plan output is isolated — only shows resources for that env. (3) Modules are DRY — a fix in `modules/eks-cluster` applies to both envs after plan+apply in each.
+
+**[S] You need to provision identical infrastructure in us-east-1 and eu-west-1. How do you do it in Terraform without duplicating all the .tf files?**
+Separate directories — `terraform/us-east-1/` and `terraform/eu-west-1/` — each pointing to shared modules. The module receives the region as a variable: `module "eks" { source = "../modules/eks-cluster"; region = "us-east-1" }`. The provider in each directory pins to its region: `provider "aws" { region = var.region }`. Backend state keys are scoped: `key = "us-east-1/terraform.tfstate"`. At scale, Terragrunt's `generate` block writes the provider and backend automatically from a root `terragrunt.hcl`, so each env directory only contains its variable overrides. No `.tf` duplication — the module is the single source of truth.
+
+**[S] A junior engineer ran `terraform destroy` in what they thought was the dev directory. It was actually prod. How do you prevent this?**
+Three layers: (1) `prevent_destroy = true` in the lifecycle block on production resources — Terraform errors before executing. (2) Separate AWS accounts for dev and prod — the dev IAM role simply doesn't have permissions to touch prod resources. Terraform assumes the role from the directory's provider config — destroy in `terraform/dev/` assumes `CartOps-Dev-TerraformRole` which has no prod permissions. (3) State isolation — prod state lives in a separate S3 bucket that the dev role can't write to. If all three are in place, the destroy fails at the permissions level before touching a single resource.
+
+**[G] What is Terragrunt and when do you use it?**
+Terragrunt is a thin wrapper around Terraform that solves the DRY problem at scale. Without it, managing 10 environments × 3 regions means 30 directories each with nearly-identical `backend.tf` and `provider.tf`. Terragrunt's `root terragrunt.hcl` defines the backend and provider template once — each leaf directory's `terragrunt.hcl` only declares its variable overrides. Terragrunt generates the boilerplate files before running Terraform. Also adds: `run_all` to apply all modules in dependency order, `dependency` blocks for cross-module output references (e.g. VPC ID from the VPC module piped into the EKS module), and remote state helpers. When to use: when you have more than 3 environments or multiple regions. For our single-env project, plain Terraform is fine.

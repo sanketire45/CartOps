@@ -10,12 +10,12 @@
 
 | # | Topic | File | Sections Covered |
 |---|---|---|---|
-| 01 | Kubernetes Core | [01-kubernetes-core.md](01-kubernetes-core.md) | ✅ Cluster arch, Pods, Scheduling, Reliability, Security (6 layers), Storage, RBAC, Node capacity, HPA, VPA, CA, Karpenter, KEDA, SLI/SLO, Scaling best practices |
-| 03 | Terraform & IaC | [03-terraform-iac.md](03-terraform-iac.md) | ✅ data vs resource, state, lifecycle, Helm releases, destroy patterns |
+| 01 | Kubernetes Core | [01-kubernetes-core.md](01-kubernetes-core.md) | ✅ Cluster arch, Pods, Scheduling, Reliability, Security (6 layers), Storage, RBAC, Node capacity, HPA, VPA, CA, Karpenter, KEDA, SLI/SLO, Scaling best practices, ResourceQuota+LimitRange, Stakater Reloader |
+| 03 | Terraform & IaC | [03-terraform-iac.md](03-terraform-iac.md) | ✅ data vs resource, state, lifecycle, Helm releases, destroy patterns, multi-region/multi-account |
 | 04 | Docker & Containers | [04-docker-containers.md](04-docker-containers.md) | ✅ multi-stage, layer caching, non-root, socket security, CRI/OCI |
 | 05 | CI/CD & Jenkins | [05-cicd-jenkins.md](05-cicd-jenkins.md) | ✅ pipeline, quality gates, Docker build in CI, secrets, CI vs CD split |
 | 06 | GitOps & ArgoCD | [06-gitops-argocd.md](06-gitops-argocd.md) | ✅ fundamentals, architecture, sync strategies, drift, Helm, Flux comparison |
-| 07 | AWS (Well-Architected) | [07-aws-services.md](07-aws-services.md) | ✅ Security, Reliability, Performance, Cost, Operational Excellence |
+| 07 | AWS (Well-Architected) | [07-aws-services.md](07-aws-services.md) | ✅ Security, Reliability, Performance, Cost, Operational Excellence, DR & Backup |
 | 08 | Networking | [08-networking.md](08-networking.md) | ✅ VPC CNI, ENI, prefix delegation, Services, Ingress, NetworkPolicy, DNS, VPC, war stories |
 | 09 | Observability | [10-observability.md](10-observability.md) | ⏳ fill when Prometheus + Loki done |
 

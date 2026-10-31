@@ -233,6 +233,12 @@ The EBS volume was previously owned by root (UID 0). When MySQL ran as UID 999, 
 | WaitForFirstConsumer | Delay PV provisioning until pod is scheduled → correct AZ |
 | `volumeClaimTemplates` | StatefulSet auto-creates one PVC per replica (data-mysql-0, data-mysql-1) |
 | StatefulSet PVC lifecycle | PVCs NOT deleted when StatefulSet is deleted — intentional (protect data) |
+| Secret volume mount | Secret mounted as tmpfs in pod — kubelet syncs changes ~1 min automatically. Pod sees new value without restart. |
+| envFrom Secret | Secret injected as env vars at pod start — lives in process memory. Never auto-updates on Secret change. |
+| ESO chain | Secrets Manager → ESO → K8s Secret in etcd → pod consumes via envFrom or volume |
+| Reloader | Stakater Reloader watches K8s Secrets/ConfigMaps — on change patches Deployment annotation → triggers rolling update |
+| ArgoCD + ConfigMap | ArgoCD applies ConfigMap changes. Pods do NOT restart — spec.template hash unchanged. Reloader bridges the gap. |
+| EBS snapshot restore | Delete volume → pod Pending → create new EBS from snapshot → patch PV `volumeHandle` → pod re-attaches |
 
 ### Questions
 
@@ -247,6 +253,21 @@ StatefulSet `volumeClaimTemplates` creates PVCs outside Terraform's control — 
 
 **[G] EBS vs EFS — when do you use each?**
 EBS — block storage, AZ-specific, ReadWriteOnce (only one pod can mount at a time), fast, use for databases. EFS — network filesystem, multi-AZ, ReadWriteMany (multiple pods simultaneously), slower, use for shared config or uploads that multiple pods need to read/write.
+
+**[G] Secret volume mount vs envFrom — what's the difference?**
+`envFrom` bakes secrets as environment variables at pod start. They live in the process's memory for the pod's lifetime — the pod must restart to see a new value. A Secret volume mount exposes the secret as files on a tmpfs (RAM) filesystem inside the container. Kubelet syncs the volume automatically when the Secret changes in etcd — no pod restart needed, the app just re-reads the file. Production rule: use volume mounts for anything that needs to rotate without pod restart (TLS certs, tokens). Use envFrom for static credentials where rotation tolerance is acceptable and a rolling restart is fine.
+
+**[S] You updated a secret in AWS Secrets Manager. 10 minutes later the pod still reads the old value. Walk me through why.**
+The full chain: Secrets Manager → ESO → K8s Secret in etcd → pod. ESO syncs on its `refreshInterval` (default 1h in many configs) — so the K8s Secret in etcd may not have the new value yet. Once ESO updates the K8s Secret, if the pod uses `envFrom` the running process still doesn't see the change — env vars are baked at pod start. Reloader is needed to detect the Secret update and trigger a rolling restart. If using a volume mount, kubelet will sync the file automatically once etcd has the new value. Fix: (1) Reduce ESO `refreshInterval` to 1m for fast-rotation secrets. (2) Use volume mount instead of envFrom for auto-reload without Reloader. (3) Deploy Stakater Reloader as a safety net for envFrom use cases.
+
+**[S] Your ConfigMap changed in Git. ArgoCD synced successfully. But pods are still reading the old value. Why?**
+ArgoCD applies the ConfigMap to the cluster — the ConfigMap object in etcd has the new data. But ArgoCD only triggers a rolling restart if `spec.template` in the Deployment changes. A ConfigMap change alone doesn't change the Deployment's pod template hash → no restart is triggered → running pods keep their in-memory env vars from the old version. Fix: deploy Stakater Reloader. It watches ConfigMaps and, when one changes, patches an annotation (`reloader.stakater.com/last-reload`) on the Deployment's pod template → K8s sees the pod template changed → rolling update fires automatically.
+
+**[S] Your MySQL StatefulSet's EBS volume was accidentally deleted. You have a snapshot. Walk me through the restore.**
+Step 1: the pod is now in Pending (no volume to mount). Step 2: create a new EBS volume from the snapshot in the same AZ as the pod (e.g. `aws ec2 create-volume --snapshot-id snap-xxx --availability-zone us-east-2a`). Step 3: patch the existing PV's `spec.csi.volumeHandle` with the new EBS volume ID: `kubectl patch pv <pv-name> -p '{"spec":{"csi":{"volumeHandle":"vol-newid"}}}'`. Step 4: the PVC is still bound to the PV (binding is untouched). The pod scheduler sees the volume is available → mounts it → pod moves to Running. Key insight: only the PV's `volumeHandle` changes — the PVC binding, the StatefulSet, and the StorageClass are all untouched.
+
+**[G] Explain ConfigMaps and Secrets. How do you manage them across environments?**
+ConfigMaps store non-sensitive config (env names, feature flags, app properties). Secrets store sensitive data (passwords, API keys, TLS certs) — base64-encoded in etcd, encrypted at rest via KMS envelope encryption. Across environments: we use ESO (External Secrets Operator) — one ExternalSecret per service per environment that pulls from AWS Secrets Manager paths like `/ecom/dev/mysql-credentials` and `/ecom/prod/mysql-credentials`. The Helm chart references the same K8s Secret name in all envs; ESO fills the value from the environment-specific Secrets Manager path. Rotation: update Secrets Manager → ESO syncs the K8s Secret → Reloader triggers rolling restart → zero downtime secret rotation.
 
 ---
 
@@ -577,3 +598,70 @@ Readiness probe: "is this pod ready to receive traffic?" HPA and Services both r
 
 **[I] Walk me through a production incident where autoscaling failed and caused downtime.**
 During a flash sale, product-category HPA hit `maxReplicas: 5` — couldn't scale further. New pods went Pending. CA saw Pending pods → tried to add a node. But `node_max_size` was still 2 in Terraform from before task #26a. CA logged "node group at max size" and did nothing. Pods sat Pending for 8 minutes — during which requests were queued or dropped → latency spike → users saw 504s. Fix applied: raised `node_max_size` to 5 in `variables.tf` + re-ran terraform apply. Lesson: HPA `maxReplicas` and CA `node_max_size` must be sized together. Scaling one without the other creates a silent ceiling.
+
+---
+
+## 17. ResourceQuota & LimitRange
+
+### Cheat Sheet
+
+| Concept | Key Point |
+|---|---|
+| ResourceQuota | Namespace-level ceiling — total CPU, memory, pods, PVCs the whole namespace can consume |
+| LimitRange | Per-container defaults and bounds — default request, default limit, min, max per container |
+| Why both | Quota stops a namespace consuming unbounded resources. LimitRange ensures containers without explicit requests still count toward Quota. |
+| Quota enforcement requires requests | If a container has no requests, Quota can't count it — LimitRange's `defaultRequest` fixes this by injecting a request automatically |
+| `requests.cpu` vs `limits.cpu` | Quota tracks both separately — a pod with `requests.cpu: 500m` and `limits.cpu: 1` counts against both buckets |
+| Admission timing | Both are enforced at pod creation by the admission controller — rejected before scheduling |
+
+### Questions
+
+**[G] What is the difference between ResourceQuota and LimitRange?**
+ResourceQuota is a namespace-level ceiling — it caps the total resources all pods in a namespace can request/limit in aggregate. Example: `requests.cpu: 4` means all pods combined cannot request more than 4 CPU cores. LimitRange is a per-container policy — it sets defaults and bounds for individual containers. If a container doesn't specify `requests.cpu`, LimitRange injects a default. If a container tries to request more than `max.cpu`, admission rejects it. Use both together: Quota prevents namespace runaway, LimitRange prevents individual containers from claiming the entire Quota in one pod.
+
+**[G] Why do you need LimitRange if you already have ResourceQuota?**
+ResourceQuota only tracks what pods have explicitly requested. A container with no requests set is "invisible" to Quota — it can schedule and run without counting against the Quota, effectively bypassing it. LimitRange's `defaultRequest` injects a request automatically on any container that doesn't specify one. Now every container counts against Quota. Without LimitRange, one developer could deploy hundreds of pods with no requests set and exhaust cluster resources while Quota reports 0% used.
+
+**[S] A new developer deployed a pod with no resource requests or limits. Other pods in the namespace started failing admission with "exceeded quota". Why?**
+Without LimitRange, a pod with no requests runs fine and doesn't count against Quota. But if LimitRange IS configured with a `defaultRequest`, that request is injected automatically at admission. The developer's pod got a default request injected, which consumed Quota budget. Later pods hit the quota ceiling. Fix: (1) Check `kubectl describe resourcequota -n <ns>` to see current usage vs hard limit. (2) Increase the Quota, or (3) tune the LimitRange `defaultRequest` to a smaller value, or (4) have the developer set explicit requests at the correct size.
+
+**[S] You set a ResourceQuota of `requests.cpu: 4` for the dev namespace. A developer tried to deploy a pod requesting 2 CPU — it was rejected even though only 2.5 CPU was already used. Why?**
+Check the existing pods. A pod with no requests set may have had LimitRange's `defaultRequest` injected, consuming part of the 1.5 CPU gap. Or: a completed Job pod that wasn't cleaned up is still counted by Quota (Quota counts all pods in non-terminal states). Fix: `kubectl get pods -n dev --field-selector=status.phase!=Running,status.phase!=Succeeded` — find non-running pods still consuming quota. Clean them up. Also confirm with `kubectl describe resourcequota -n dev` — it shows `used` vs `hard` for each resource.
+
+---
+
+## 18. Stakater Reloader
+
+### Cheat Sheet
+
+| Concept | Key Point |
+|---|---|
+| Problem it solves | ConfigMap/Secret changes don't restart pods — envFrom is baked at pod start, pod never sees new value |
+| How it works | Runs as a Deployment (one pod, cluster-wide). Watches K8s Secrets and ConfigMaps via informer. On change → patches Deployment annotation → K8s rolling update fires |
+| Auto mode | `reloader.stakater.com/auto: "true"` on the Deployment — restarts on ANY mounted Secret/ConfigMap change |
+| Targeted mode | `secret.reloader.stakater.com/reload: "app-secret"` — restarts only when that specific Secret changes |
+| NOT needed for volume mounts | Kubelet syncs volume-mounted Secrets automatically (~1 min). Reloader is for envFrom only. |
+| Installed via Helm | `helm repo add stakater https://stakater.github.io/stakater-charts && helm install reloader stakater/reloader -n kube-system` |
+| ArgoCD + Reloader interaction | ArgoCD applies the ConfigMap. Reloader patches the Deployment annotation. ArgoCD then sees the annotation diff as OutOfSync. Fix: add `ignoreDifferences` for the annotation in ArgoCD Application config. |
+
+### Questions
+
+**[G] What is Stakater Reloader and why do you need it?**
+Reloader solves the envFrom stale-value problem. When a Deployment uses `envFrom` to load a Secret or ConfigMap, those values are baked into the process environment at pod start — they never update while the pod is running. Reloader runs as a separate Deployment with one pod. It watches all Secrets and ConfigMaps via the K8s informer API. When a watched resource changes in etcd, Reloader patches an annotation on the Deployment's pod template (`reloader.stakater.com/last-reload: <timestamp>`). Since pod template changed, K8s triggers a rolling update. New pods pick up the new Secret/ConfigMap value. Zero manual intervention.
+
+**[G] Reloader vs volume mount — when do you use each for secrets?**
+Volume mount: Secret is mounted as a file on tmpfs. Kubelet automatically syncs the file when the K8s Secret changes — no pod restart, no Reloader needed. The app must re-read the file to get the new value (works for TLS certs, token files). envFrom + Reloader: Secret is injected as env vars. Reloader detects the change and triggers a rolling restart — pods come up fresh with new values. Use volume mount for: TLS certs, long-lived tokens where hot-reload is important. Use envFrom + Reloader for: database passwords, API keys where the app reads them once at startup and the rolling restart is acceptable.
+
+**[S] You deployed Reloader. ArgoCD keeps showing the Deployment as OutOfSync even though you haven't changed anything. Why?**
+Reloader patches the Deployment's pod template annotation every time it processes a reload. ArgoCD compares the live Deployment against the Git-declared one — the annotation is in Git as absent (or with a timestamp from last sync), but Reloader added a new value in the cluster. ArgoCD sees a diff: cluster has `reloader.stakater.com/last-reload: 2024-01-15T10:30:00Z`, Git doesn't. It reports OutOfSync. Fix: add `ignoreDifferences` in the ArgoCD Application spec:
+```yaml
+ignoreDifferences:
+  - group: apps
+    kind: Deployment
+    jsonPointers:
+      - /spec/template/metadata/annotations/reloader.stakater.com~1last-reload
+```
+Now ArgoCD ignores that annotation when comparing. The Deployment stays InSync.
+
+**[S] You have a Secret that rotates every 24 hours via ESO from Secrets Manager. Pods need to pick up the new value with minimal downtime. Design the setup.**
+Full chain: (1) Secrets Manager rotates the secret value every 24h (Lambda rotation function or manual update). (2) ESO ExternalSecret has `refreshInterval: 1h` — it polls Secrets Manager and updates the K8s Secret within 1 hour of rotation. (3) Stakater Reloader watches the K8s Secret. On update, it patches the Deployment annotation → rolling update starts. (4) Rolling update respects PDB and readiness probes — new pods with new credentials come up, old pods drain, zero downtime. End-to-end: at most 1h lag (ESO sync) + ~60 seconds for rolling update. For critical secrets needing faster rotation: reduce ESO `refreshInterval` to `5m`. For volume-mounted secrets (TLS certs): skip Reloader — kubelet auto-syncs the file, app re-reads on next cert check.

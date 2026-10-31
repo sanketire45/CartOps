@@ -143,3 +143,45 @@ ECR stores images in S3 — old untagged images accumulate and cost money. Lifec
 
 **[S] A Jenkins build succeeded but ArgoCD is still running the old version. Why?**
 ArgoCD syncs from Git — if the Helm values file wasn't updated with the new image tag, ArgoCD sees no diff and does nothing. The Jenkins pipeline must update `values.yaml` (or the environment-specific overlay) with the new ECR image tag and commit it to Git. ArgoCD detects the Git change and syncs. Without the Git commit step, the image pushed to ECR is never deployed.
+
+---
+
+## Pillar 6 — Disaster Recovery & Backup
+
+### Cheat Sheet
+
+| Tool / Feature | What It Does | When to Use |
+|---|---|---|
+| EBS Snapshots | Point-in-time incremental backup of EBS volumes stored in S3 | Database volumes, stateful workloads |
+| AWS DLM | Data Lifecycle Manager — automated EBS snapshot schedule, free | EBS-only, simple retention rules |
+| AWS Backup | Centralised backup service — EBS, RDS, EFS, DynamoDB, cross-account | Multi-service, compliance, Vault Lock WORM |
+| RDS automated backups | Built-in to RDS — daily snapshot + transaction logs for PITR. On by default (7d retention). | All RDS instances |
+| Aurora backups | Always on, cannot be disabled. PITR to any second within 35 days. | Aurora only |
+| `delete_automated_backups = false` | Terraform flag — keeps RDS backups when the instance is destroyed. | Production RDS Terraform config |
+| DR tiers | Backup/Restore (hours) → Pilot Light (minutes) → Warm Standby (seconds) → Active-Active (zero) | Match RTO/RPO to business need |
+
+### Questions
+
+**[G] What is the difference between AWS DLM and AWS Backup for EBS?**
+DLM (Data Lifecycle Manager) is EBS-only and free. You create a lifecycle policy that takes snapshots on a schedule (e.g. daily at 02:00) and retains the last N. Simple, zero overhead for single-service EBS backup. AWS Backup is a centralised backup service that covers EBS, RDS, EFS, DynamoDB, Aurora, S3, and more. It adds: cross-account backup copy, cross-region copy, compliance reports, Vault Lock (WORM — snapshots can't be deleted even by admins), and unified backup policies across services. Use DLM for: EBS-only, simple retention. Use AWS Backup for: compliance-driven environments, multi-service backup governance, cross-account DR.
+
+**[G] Are RDS and Aurora automated backups enabled by default?**
+RDS automated backups: on by default with 7-day retention, but can be disabled by setting `backup_retention_period = 0`. AWS Backup is NOT required — RDS has its own native mechanism that stores daily snapshots + transaction logs to S3 (managed by AWS). Aurora automated backups: always enabled, cannot be disabled. Both support PITR (Point-in-Time Recovery) — you can restore to any second within the retention window. Critical Terraform flag: `delete_automated_backups = false` on the RDS resource — without this, when you run `terraform destroy` in dev, automated backups are deleted immediately.
+
+**[G] Walk me through restoring an EBS volume from a snapshot in Kubernetes.**
+Scenario: MySQL StatefulSet's EBS volume was deleted. Step 1: pod goes Pending (no volume to attach). Step 2: create a new EBS volume from the snapshot in the same AZ — `aws ec2 create-volume --snapshot-id snap-xxx --availability-zone us-east-2a --volume-type gp3`. Step 3: the PVC is still bound to the old PV (which now has a dead volume reference). Patch the PV's `spec.csi.volumeHandle` with the new EBS volume ID: `kubectl patch pv <pv-name> -p '{"spec":{"csi":{"volumeHandle":"vol-newid"}}}'`. Step 4: pod scheduler re-evaluates, volume is available, pod mounts it and starts. Key point: only the PV's `volumeHandle` changes — PVC binding and all other resources are untouched.
+
+**[G] What are the four DR tiers and what RTO/RPO does each give?**
+1. **Backup & Restore** — snapshots to S3, restore when needed. RTO: hours. RPO: hours (last snapshot). Cheapest. Use for non-critical data or long RPO tolerance.
+2. **Pilot Light** — minimal core infrastructure (RDS, ECR) always running. EKS is off. On disaster: run Terraform to provision EKS, deploy from Git. RTO: 20-30 min. RPO: near-zero (RDS PITR). Use for dev/staging DR.
+3. **Warm Standby** — scaled-down duplicate environment in DR region. DB replica, minimal EKS nodes. On disaster: scale up, promote replica to primary, switch DNS. RTO: minutes. RPO: seconds (replica lag).
+4. **Active-Active** — full traffic in multiple regions simultaneously. Route53 latency routing or weighted records split traffic. Zero RTO, near-zero RPO. Most expensive. Use for global customer-facing production.
+
+**[G] Explain the difference between Availability and Reliability.**
+Availability: is the system *up*? Measured as uptime percentage — "five nines" means 99.999% uptime, ~5 minutes downtime per year. A system is available if it responds at all, even with degraded correctness. Reliability: does the system *work correctly* when it's up? A system that is up but returns wrong data, drops messages, or silently fails is available but not reliable. K8s features for availability: replicas, PDB, rolling updates, readiness probes, HPA. K8s features for reliability: graceful shutdown (SIGTERM handler + `terminationGracePeriodSeconds`), SQS `ON_SUCCESS` ack (message only removed after successful processing), idempotent API design (duplicate order request doesn't create duplicate charges), circuit breakers. Most "reliability" sections in job postings are actually asking about both — know the distinction when answering.
+
+**[S] How would you design a disaster recovery strategy for this EKS platform?**
+Answer by layer: (1) **K8s objects** — all in Git (ArgoCD GitOps). In any disaster, `argocd app sync ecom-dev` recreates everything. No backup needed. (2) **EBS volumes (MySQL data)** — DLM daily snapshots with 7-day retention. In DR, create new EBS from latest snapshot and patch PV volumeHandle. (3) **RDS** — automated backups + PITR enabled. Cross-region read replica for warm standby. Promote replica and update connection string in Secrets Manager for prod failover. (4) **EKS cluster** — Terraform IaC. In disaster: `terraform apply` in DR region recreates cluster in ~20 min. (5) **DNS + traffic** — Route53 health checks on primary ALB. On health check failure → Route53 failover record points to DR region ALB. This maps to Pilot Light (EKS) + Warm Standby (RDS) tier — RTO ~20-30 min, RPO near-zero for DB.
+
+**[G] How do you reduce cloud costs without affecting availability?**
+Five production levers: (1) **KEDA scale-to-zero** — async workers (notification-worker) run 0 pods when queue is empty. Zero cost overnight. (2) **Karpenter consolidation** — merges underutilised nodes, removes half-empty ones CA would leave. Actively right-sizes the cluster. (3) **Spot instances** — 60-70% cheaper for stateless services with multiple replicas. Karpenter handles interruptions with graceful shutdown + rescheduling. (4) **Accurate resource requests** — right-size with VPA recommendations. Overprovisioned requests waste slot capacity and trigger unnecessary CA scale-up. (5) **Daily cluster destroy for dev** — we run `terraform destroy` every night in dev (`scripts/destroy.sh`), saving ~$70/month on a 3-node EKS cluster. Data in EBS and RDS survives the destroy — only compute is deallocated. Prod stays always-on; dev burns money only during working hours.
