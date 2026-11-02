@@ -132,9 +132,29 @@ Only podAntiAffinity was set (topologyKey: hostname). Anti-affinity prevents two
 | AZ imbalance at scale | topologySpreadConstraints maxSkew:1 zone | #28 — all 3 deployments |
 | Node drain kills last pod | PodDisruptionBudget minAvailable:1 | #28 — pdb.yaml |
 | Traffic to unready pod | Readiness probe | #27 — /actuator/health/readiness |
+| App not ready but readiness fires too early | startupProbe gates readiness until fully initialised | failureThreshold:60, periodSeconds:5 |
 | In-flight requests dropped | Graceful shutdown (terminationGracePeriodSeconds + preStop) | #21 |
 | Downtime during your deploy | Rolling update maxUnavailable:0 maxSurge:1 | #22 |
 | Bad deploy to 100% users | Canary + Prometheus auto-rollback | #20 — planned after monitoring |
+
+### Deployment Strategy Cheat Sheet
+
+| Strategy | Traffic during deploy | Rollback | Resource cost | Risk |
+|---|---|---|---|---|
+| **Rolling Update** | Gradual — some v1, some v2 pods | `kubectl rollout undo` ~30s | 1x + small surge | Brief mixed-version window |
+| **Blue-Green** | Instant full cutover (flip Service selector) | Flip selector back, instant | 2x during deploy | DB migrations must be backward-compatible |
+| **Canary** | % split (5% v2, 95% v1), increase slowly | Remove canary Deployment | 1.1x | Slowest to roll out 100% |
+| **Recreate** | All old pods killed first, then new pods start | `kubectl rollout undo` | 1x | Guaranteed downtime window |
+
+### Probe Cheat Sheet
+
+| Probe | Controls | Fails → | Gates what |
+|---|---|---|---|
+| `startupProbe` | Is the app done initialising? | readiness+liveness paused | Nothing. Just delays when other probes start |
+| `readinessProbe` | Is the app ready for traffic? | Pod marked NotReady, removed from Service endpoints | **Traffic routing** |
+| `livenessProbe` | Is the app alive? | kubelet restarts the container | **Container lifecycle** |
+
+**Key rule:** Only readiness probe gates Service endpoints. Liveness probe does NOT remove a pod from endpoints — it just restarts the container.
 
 **The one-liner for interviews:**
 > "Reliability is layered — replicas for node failures, anti-affinity for co-location, PDB for planned maintenance, readiness probes for traffic safety, graceful shutdown for request integrity, and rolling update knobs for deploy safety."
@@ -158,6 +178,24 @@ Before touching nodes, the groundwork must be in place: 2 replicas, PDB, readine
 
 **[G] `minAvailable` vs `maxUnavailable` in PDB — which is clearer?**
 Same outcome with 2 replicas. `minAvailable: 1` reads as a guarantee ("I need at least 1 healthy"). `maxUnavailable: 1` reads as a tolerance ("I can lose at most 1"). We use `minAvailable` — the Helm if-guard `{{- if gt (int .Values.*.replicaCount) 1 }}` also prevents creating a PDB on a single-replica service (would permanently block drains).
+
+**[G] What is the difference between startupProbe, readinessProbe, and livenessProbe? Which one controls Service endpoints?**
+Three distinct jobs: `startupProbe` — runs first, gates when the other two probes begin. Use for slow-starting apps (Spring Boot, JVM) where you need up to 5 minutes for full initialisation. While it hasn't passed, readiness and liveness are completely paused. `readinessProbe` — controls Service endpoint membership. Fails → pod removed from endpoints → no traffic. Passes → added to endpoints → traffic flows. This is the only probe that gates traffic routing. `livenessProbe` — controls container lifecycle. Fails → kubelet kills and restarts the container. Does NOT remove the pod from Service endpoints before restarting — in-flight requests can get 502 during that window. Key distinction: readiness gates traffic, liveness gates restarts. Only readiness affects endpoints.
+
+**[G] Why do you need startupProbe if you already have readinessProbe?**
+Without startupProbe, readinessProbe begins immediately at container start. For Spring Boot, `/actuator/health/readiness` returns 200 at second ~3 when the HTTP server starts — but the MySQL connection pool and SQS client take 40-60 more seconds. So: readiness passes at second 3 → pod added to Service endpoints → real traffic hits the pod → 502 for 57 seconds. startupProbe solves this by pausing readiness until the app signals it's fully initialised. Set `failureThreshold: 60, periodSeconds: 5` = gives up to 5 minutes. Only after startupProbe passes does readiness begin. Old pods serve all traffic during that window. Zero 502s during deploy.
+
+**[G] What is Blue-Green deployment and how does it work in Kubernetes?**
+Two identical Deployments run simultaneously: Blue (current live version) and Green (new version). The Service selector points at one label. To deploy: bring up the Green Deployment, run smoke tests against it, then patch the Service selector from `version: blue` to `version: green` — all traffic switches instantly. Rollback = patch selector back to blue. Instant, no pod restarts. How it differs from Rolling Update: Rolling Update gradually replaces pods one by one — during the deploy some requests go to v1 pods and some to v2 pods (mixed-version window). Blue-green has no mixed-version window — traffic is either 100% v1 or 100% v2.
+
+**[S] What is the hardest problem with blue-green deployments in production?**
+Database schema migrations. Both Blue and Green pods connect to the same database. If your new version (Green) requires a new column or renames a table, you can't apply that migration before switching — the old Blue pods will break. You can't apply it after — Green needs it to start. Solution: **backward-compatible migrations**. Three-phase deploy: (1) migration adds new column, both Blue and Green work with old+new schema. (2) Traffic switches to Green. (3) After Blue is fully decommissioned, run cleanup migration to remove old column. This is called expand-contract pattern — expand the schema first, contract after.
+
+**[G] Blue-Green vs Canary — which do you use when?**
+Blue-Green: use when you want instant switchover and instant rollback. Good for: backend services with no UI, API version changes, when you've done thorough staging testing. Risk: if Green has a subtle bug, 100% of users hit it simultaneously. Canary: use when you want to limit blast radius. Send 5% of traffic to v2, watch error rates and latency in Prometheus for 30 minutes, then increment to 20%, 50%, 100%. If error rate spikes at 5%, only 5% of users were affected. Good for: UI changes, risky new features, anything that's hard to fully test in staging. Canary requires a traffic-splitting layer — Argo Rollouts, Istio, or NGINX `canary-weight` annotation.
+
+**[G] Your Rolling Update is causing 502s during deploy even though maxUnavailable is 0. Why?**
+Two possible causes: (1) startupProbe is not configured — readiness probe fires at second 3 while the app needs 60s to fully initialise. Pod passes readiness early, gets traffic, returns 502. Fix: add startupProbe. (2) terminationGracePeriodSeconds is too short — the old pod gets SIGTERM, waits 30s, then gets SIGKILL. But in-flight requests that started before SIGTERM needed more than 30s to complete. Fix: increase `terminationGracePeriodSeconds` + add `preStop: sleep 5` to drain connections before SIGTERM. Together: startupProbe prevents 502 on new pods starting, graceful shutdown prevents 502 on old pods dying.
 
 ---
 
