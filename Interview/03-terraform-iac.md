@@ -54,7 +54,9 @@ They ran apply from different directories or different state file locations — 
 | State drift | Real AWS resource changed outside Terraform — plan shows unexpected diff |
 | `terraform import` | Bring an existing resource into Terraform state |
 | `terraform state mv` | Move a resource between state paths without destroying |
+| `terraform state rm` | Remove a resource from state WITHOUT deleting the real AWS resource |
 | Lost state | Terraform thinks nothing exists — tries to recreate everything |
+| Backend bucket name | Backend block evaluated BEFORE vars — bucket name must be a literal, not `var.bucket` |
 
 ### Questions
 
@@ -66,6 +68,18 @@ When real AWS resources change outside Terraform — someone clicked in the cons
 
 **[S] You need to rename a Terraform resource block from `aws_eks_cluster.main` to `aws_eks_cluster.ecom`. What happens if you just rename it in HCL?**
 Terraform sees the old resource deleted and a new one created — it will destroy the EKS cluster and recreate it. Correct approach: `terraform state mv aws_eks_cluster.main aws_eks_cluster.ecom` — renames the state entry without touching AWS. Then rename in HCL. Plan shows no changes. This is the difference between a safe refactor and an outage.
+
+**[S] `terraform destroy` outputs "No changes. No objects need to be destroyed." but you can see the EKS cluster running in the AWS console. What happened?**
+State bucket misconfiguration — Terraform is pointing at the wrong S3 bucket or key. It initialised with an empty state (no objects), so it believes nothing exists. First check: `aws s3 ls s3://<bucket-name>/<key-prefix>/` directly — does the state file exist? Second: confirm the backend config in `terraform.tf` against the actual bucket name. Common mistake: the bucket was created with a name that includes the account ID suffix (`ecom-tfstate-123456789012`) but the backend block says `ecom-tfstate`. Terraform silently initialises with an empty local state, reports "nothing to destroy." Fix: correct the bucket name in the backend block and run `terraform init -reconfigure`.
+
+**[S] A team member manually deleted the EKS cluster via the AWS console. You now run `terraform destroy` and get errors: "Kubernetes cluster unreachable" on all Helm releases. What do you do?**
+The Helm provider needs a live Kubernetes API to run `helm uninstall`. With the cluster deleted, it has no endpoint. Remove the Helm resources from state before destroying — they're already gone: `terraform state rm helm_release.argocd helm_release.kyverno helm_release.keda`. Then run `terraform destroy` — it only hits AWS APIs (IAM, ECR, SQS) which are still reachable. This is the safe pattern: `terraform state rm` detaches a resource from state management without touching AWS, letting you skip the unreachable dependency.
+
+**[I] You ran `terraform destroy` after a manual cluster delete. It hung for 5+ minutes on `helm_release.kyverno` then timed out. How did you prevent it next time?**
+Kyverno installs CRDs with finalizers — `helm uninstall` tries to delete the CRDs, the finalizer waits for the webhook pod to confirm, but the webhook pod is already gone with the cluster. Deadlock. Two fixes: (1) `wait = false` on the Helm release — fire uninstall and don't wait for confirmation (safe on full cluster destroy, EKS node deletion breaks all finalizers). (2) In `destroy.sh`, pre-remove all `helm_release.*` entries from state before running destroy — `terraform state list | grep '^helm_release\.' | xargs terraform state rm`. Now destroy only calls AWS APIs and completes in 2-3 minutes total.
+
+**[G] What does `terraform state rm` do and when would you use it?**
+It removes a resource from the state file without touching the real AWS resource. Three use cases: (1) Hand off a resource to manual management — remove it from Terraform so apply/destroy no longer touches it (e.g. a shared RDS you don't want Terraform to delete). (2) Clean up orphaned state — a Helm release whose cluster was manually deleted; keep the entry and destroy will fail trying to helm-uninstall against a dead endpoint. (3) Split a monorepo — move a resource to a new state file: `state rm` here, then `terraform import` in the new location. Always verify after: `terraform plan` should show the resource as "new" (Terraform wants to create it) — which confirms it was removed from state correctly.
 
 ---
 
@@ -151,6 +165,12 @@ Resources Terraform didn't create: StatefulSet PVCs (created by K8s), ECR images
 
 **[G] Why is the KMS key in `scripts/create-kms-key.sh` and not in Terraform?**
 KMS keys have a mandatory 7-30 day deletion window — you can't delete one immediately. If KMS were in Terraform state and you ran `terraform destroy`, it would schedule deletion but the key wouldn't actually be gone for 7 days. Next `terraform apply` would fail trying to create a new key with the same alias (alias still exists pointing to the pending-deletion key). Managing KMS outside Terraform, referenced via `data "aws_kms_key"`, avoids this entirely.
+
+**[G] Why does your `destroy.sh` remove all Helm releases from state before running `terraform destroy`?**
+Helm's `uninstall` hook calls the Kubernetes API to delete resources and wait for CRD finalizers to clear. When you destroy an EKS cluster, the API endpoint is gone — every Helm release in state hangs trying to reach a dead endpoint, then times out (5 min each for kyverno, keda, argocd = 15+ min of waiting + errors). By removing all `helm_release.*` entries from state first, Terraform skips the `helm uninstall` call entirely for those resources and goes straight to deleting AWS resources (IAM, ECR, SQS) — those APIs are always reachable. Destroy completes in 2-3 minutes. The Helm resources are already gone with the cluster anyway.
+
+**[S] Walk me through your `destroy.sh` and why it does what it does.**
+Three steps: (1) Delete the MySQL PVC (`data-mysql-0`) before destroy — StatefulSet PVCs are created by Kubernetes `volumeClaimTemplates`, not by Terraform, so Terraform can't track or delete them. Deleting the PVC also deletes the underlying EBS volume. If skipped, the EBS volume orphans and keeps billing. (2) Remove all Helm releases from state — `terraform state list | grep '^helm_release\.' | xargs terraform state rm`. Prevents 5+ minute timeouts per Helm release on cluster destroy. (3) `terraform destroy -auto-approve` — now only AWS-native resources remain in state (IAM, ECR, SQS, EKS). All complete in 2-3 minutes with no errors.
 
 ---
 

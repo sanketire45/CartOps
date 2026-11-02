@@ -23,6 +23,10 @@
 14. [KEDA — Event-Driven Autoscaling](#14-keda--event-driven-autoscaling)
 15. [SLI / SLO / Error Budget](#15-sli--slo--error-budget)
 16. [Scaling Best Practices](#16-scaling-best-practices)
+17. [ResourceQuota & LimitRange](#17-resourcequota--limitrange)
+18. [Stakater Reloader](#18-stakater-reloader)
+19. [Velero — Cluster Backup & Restore](#19-velero--cluster-backup--restore)
+20. [ALB + cert-manager TLS](#20-alb--cert-manager-tls)
 
 ---
 
@@ -665,3 +669,84 @@ Now ArgoCD ignores that annotation when comparing. The Deployment stays InSync.
 
 **[S] You have a Secret that rotates every 24 hours via ESO from Secrets Manager. Pods need to pick up the new value with minimal downtime. Design the setup.**
 Full chain: (1) Secrets Manager rotates the secret value every 24h (Lambda rotation function or manual update). (2) ESO ExternalSecret has `refreshInterval: 1h` — it polls Secrets Manager and updates the K8s Secret within 1 hour of rotation. (3) Stakater Reloader watches the K8s Secret. On update, it patches the Deployment annotation → rolling update starts. (4) Rolling update respects PDB and readiness probes — new pods with new credentials come up, old pods drain, zero downtime. End-to-end: at most 1h lag (ESO sync) + ~60 seconds for rolling update. For critical secrets needing faster rotation: reduce ESO `refreshInterval` to `5m`. For volume-mounted secrets (TLS certs): skip Reloader — kubelet auto-syncs the file, app re-reads on next cert check.
+
+---
+
+## 19. Velero — Cluster Backup & Restore
+
+### Cheat Sheet
+
+| Concept | Key Point |
+|---|---|
+| What it backs up | Kubernetes objects (Deployments, Services, ConfigMaps, Secrets, PVCs) from etcd via K8s API |
+| What it does NOT back up by default | PVC data (EBS volume contents) — needs the CSI snapshot plugin |
+| CSI snapshot plugin | Triggers an EBS snapshot at backup time — captures volume data alongside K8s objects |
+| Storage backend | S3 bucket — stores object JSON snapshots and volume snapshot metadata |
+| `BackupStorageLocation` CRD | Tells Velero which S3 bucket/prefix and which AWS region |
+| `VolumeSnapshotLocation` CRD | Tells Velero which region to create EBS snapshots in |
+| Schedule CRD | Cron expression for automatic backups — `0 2 * * *` = daily at 2am |
+| Restore scope | Can restore entire cluster, a namespace, or specific resources by label |
+| TTL | Backup retention period — Velero deletes old backups automatically from S3 |
+| IRSA | Velero needs `s3:PutObject`, `s3:GetObject`, `ec2:CreateSnapshot`, `ec2:DescribeSnapshots` |
+
+### Questions
+
+**[G] What is Velero and what does it protect you from?**
+Velero is a Kubernetes backup and restore tool. It backs up all K8s API objects (Deployments, Services, ConfigMaps, Secrets, PVCs) to S3, and optionally snapshots EBS volumes. Three failure modes it protects against: (1) Accidental deletion — someone `kubectl delete namespace ecom`, restore from yesterday's backup in minutes. (2) Cluster migration — take a backup, restore into a new cluster in a different region. (3) Cluster upgrade gone wrong — backup before the upgrade, restore the old state if the upgrade breaks something. What Velero is NOT: it's not a real-time replication tool. Recovery point is only as fresh as your last backup — daily backups mean up to 24h data loss. For lower RPO, use application-level replication (MySQL replication, not just Velero).
+
+**[G] Why do you need the CSI snapshot plugin alongside Velero?**
+Without it, Velero backs up the PVC object (the K8s resource definition) but not the actual data on the EBS volume. A restore would create an empty PVC. The CSI snapshot plugin hooks into the backup event: when Velero backs up a PVC, it calls the CSI driver (`ebs.csi.aws.com`) to create an EBS snapshot at that point in time. The snapshot is stored in AWS (same region as the cluster). On restore, Velero creates the PVC and instructs the CSI driver to restore from the snapshot. Without this plugin: you can restore your MySQL Deployment spec but you lose all your data.
+
+**[G] What is the difference between `BackupStorageLocation` and `VolumeSnapshotLocation`?**
+`BackupStorageLocation`: where the K8s object snapshots go — S3 bucket, prefix, and region. This is the JSON metadata for every Deployment, Service, ConfigMap etc. that Velero captured. `VolumeSnapshotLocation`: where EBS snapshots are created — AWS region. EBS snapshots live in AWS EC2 (not S3) — they just appear in the EC2 Snapshots console. Velero stores a pointer to each snapshot ID in S3 alongside the object metadata. On restore, it reads the pointer and calls `ec2:RestoreSnapshotFromRecycleBin` / creates a volume from the snapshot. You need both CRDs configured for a full backup that includes volume data.
+
+**[S] You ran a Velero restore after an accidental `kubectl delete namespace ecom`. Pods come up but MySQL is empty. Why?**
+The CSI snapshot plugin was not configured, or the PVC didn't have the `velero.io/exclude-from-backup: "false"` annotation explicitly set (some setups exclude PVCs by default). Velero restored the PVC object but not the volume data — MySQL started fresh on an empty EBS volume. Fix: (1) Verify `VolumeSnapshotLocation` is configured correctly in `velero get volumesnapshotlocation`. (2) Check that the backup includes volume snapshots: `velero describe backup <backup-name> --details` — look for `Persistent Volumes` section. (3) For next time: configure the CSI plugin before taking the backup you want to restore from.
+
+**[S] `velero backup describe` shows `Phase: PartiallyFailed`. What do you check?**
+`velero backup logs <backup-name>` — look for which resources failed. Common causes: (1) IRSA permissions missing — `AccessDenied on s3:PutObject` means the Velero ServiceAccount role doesn't have S3 write access. (2) CSI snapshot call failed — `AccessDenied on ec2:CreateSnapshot` means the IAM role is missing EC2 snapshot permissions. (3) A namespace has a ResourceQuota that Velero is hitting when it creates temporary objects. (4) Large PVCs that time out — increase `--snapshot-create-timeout` in the Velero Helm values. PartiallyFailed means some resources backed up successfully — you can still restore what succeeded, but the backup is incomplete.
+
+**[G] Walk me through your Velero backup schedule in this project.**
+Four pieces: (1) S3 bucket (`ecom-velero-backups`) — created in `scripts/`, outside Terraform, so Terraform destroy doesn't delete your backups. (2) IRSA role — `kube-system:velero` SA with S3 read/write on the backup bucket + EC2 snapshot permissions. (3) Velero Helm release — `vmware-tanzu/velero` chart, CSI plugin enabled, `BackupStorageLocation` pointing at the S3 bucket, `VolumeSnapshotLocation` in `us-east-2`. (4) `Schedule` object — daily at 2am UTC, `ttl: 720h` (30 days retention). The backup bucket is in `scripts/` because if Terraform destroys it during a `terraform destroy`, you lose all your backups — the whole point of backups is they outlive the cluster.
+
+---
+
+## 20. ALB + cert-manager TLS
+
+### Cheat Sheet
+
+| Concept | Key Point |
+|---|---|
+| AWS Load Balancer Controller | K8s controller that creates real ALBs/NLBs from Ingress and Service annotations |
+| ALB vs NLB | ALB = Layer 7 (HTTP/HTTPS), path-based routing, can terminate TLS. NLB = Layer 4 (TCP), faster, no path routing. |
+| IngressClass | `kubernetes.io/ingress.class: alb` tells the LBC this Ingress belongs to it |
+| cert-manager | Automates TLS cert lifecycle — issues, renews, stores certs as K8s Secrets |
+| Certificate issuers | `ClusterIssuer` (cluster-wide) vs `Issuer` (single namespace) |
+| ACME / Let's Encrypt | Free certs, auto-renewed 30 days before expiry, uses HTTP-01 or DNS-01 challenge |
+| ACM + ALB alternative | Provision cert in ACM → annotate Ingress with ACM ARN → ALB terminates TLS. No cert-manager needed. |
+| `cert-manager.io/cluster-issuer` annotation | Tells cert-manager which issuer to use for the Ingress host |
+| TLS secret name | cert-manager stores the signed cert in a K8s Secret — ALB or nginx-ingress mounts it |
+| Ingress IP vs hostname | ALB gives a hostname (not an IP). DNS must CNAME to it, not A-record. |
+
+### Questions
+
+**[G] What does the AWS Load Balancer Controller do and why do you need it?**
+ALB Controller is a Kubernetes controller that watches Ingress objects and Service objects with `type: LoadBalancer`. When it sees one, it calls AWS APIs to create a real ALB or NLB. Without it, an Ingress object sits in K8s with no effect — nothing creates the load balancer. The built-in Kubernetes cloud-controller-manager creates classic ELBs (legacy), not ALBs. ALB Controller creates modern ALBs with path-based routing, target groups per pod (not per node), WAF integration, and native TLS termination via ACM.
+
+**[G] ALB vs NLB — how do you decide?**
+ALB (Layer 7): HTTP/HTTPS, path-based routing (`/api` → service-a, `/frontend` → service-b), host-based routing, WebSocket support, WAF integration. Use for web traffic. NLB (Layer 4): pure TCP/UDP, no routing logic, lower latency, handles millions of requests per second, preserves client IP. Use for: gRPC, databases, anything non-HTTP, or when you need the lowest possible latency. In our project: nginx-ingress uses NLB (deployed as `type: LoadBalancer` Service) because nginx itself does the L7 routing — the NLB just TCP-forwards to nginx pods.
+
+**[G] cert-manager vs ACM + ALB annotation — when do you use each?**
+ACM + ALB: provision a cert in AWS Certificate Manager → add `alb.ingress.kubernetes.io/certificate-arn` annotation to the Ingress → ALB terminates TLS. Cert renewal is handled by ACM (fully automatic). Simple, no cert-manager needed. Best for: services that always go through an ALB, internal AWS-only setup. cert-manager: manages certs as K8s Secrets. The cert lives in the cluster. Nginx or any ingress controller can mount it — not just ALB. Best for: nginx-ingress (which terminates TLS inside the cluster), multi-cloud setups, or when you need the cert inside the pod (mTLS between services).
+
+**[G] How does cert-manager issue a Let's Encrypt certificate?**
+Flow: (1) You annotate an Ingress with `cert-manager.io/cluster-issuer: letsencrypt-prod`. (2) cert-manager sees the annotation → creates a `Certificate` object → creates an `Order` with Let's Encrypt ACME server. (3) Let's Encrypt issues an HTTP-01 challenge: "serve this token at `http://<your-domain>/.well-known/acme-challenge/<token>`". (4) cert-manager creates a temporary Ingress rule and a pod to serve the token. (5) Let's Encrypt hits the URL → token matches → domain ownership confirmed. (6) cert-manager receives the signed cert → stores it in a K8s Secret. (7) Ingress controller (ALB/nginx) mounts the Secret → serves HTTPS. cert-manager renews 30 days before expiry automatically.
+
+**[S] Your site suddenly serves an expired TLS cert. `kubectl describe certificate` shows `Reason: Failed`. What do you check?**
+In order: (1) `kubectl describe certificaterequest` — look at the failure reason. (2) HTTP-01 challenge failure — the ACME challenge URL wasn't reachable. Check if the Ingress is correctly routing `/.well-known/acme-challenge/*` to cert-manager's temporary pod. If your Ingress has `ssl-redirect: "true"`, it may be redirecting the HTTP challenge to HTTPS before the cert exists — cert-manager can't answer the challenge. Fix: add an exception for the challenge path. (3) Rate limit — Let's Encrypt has a limit of 50 certs per domain per week. Check cert-manager logs: `kubectl logs -n cert-manager -l app=cert-manager`. (4) Staging vs production issuer — Let's Encrypt staging issues untrusted certs (browsers reject them). If you see "Fake LE Intermediate X1" in the cert chain, you're hitting the staging issuer by mistake.
+
+**[S] Walk me through how HTTPS works end-to-end in your project.**
+Request path: Browser → ALB (port 443, TLS termination using ACM cert) → nginx-ingress pods (port 80, plain HTTP inside the cluster) → product-category or order-service pod. Two TLS options we considered: (1) ACM + ALB: cert lives in ACM, ALB terminates it. Zero cert management, but only works if ALB is the entry point. (2) nginx-ingress + cert-manager: cert is a K8s Secret, nginx mounts it. Works even with a single NLB in front of nginx. We use option 1 for simplicity — ACM auto-renews, no cert-manager deployment needed. The ALB is provisioned by ALB Controller via the Ingress annotation `alb.ingress.kubernetes.io/certificate-arn`. Traffic inside the cluster is HTTP — east-west encryption is handled by NetworkPolicy micro-segmentation (not mTLS) at this stage.
+
+**[G] Why does your Ingress get a hostname instead of an IP address from the ALB?**
+ALBs are multi-AZ — they have multiple IP addresses that change over time as AWS adds or removes capacity. AWS exposes them via a DNS hostname (e.g. `k8s-ecom-ingress-abc123.us-east-2.elb.amazonaws.com`) that always resolves to the current set of IPs. If you tried to create an A record pointing at a specific ALB IP, it would break when AWS rotates it. Your DNS must use a CNAME pointing to the ALB hostname (or an Alias record in Route 53, which is a CNAME equivalent with no extra TTL hop). `kubectl get ingress -n ecom` shows the ADDRESS field — that's the hostname, not an IP.
