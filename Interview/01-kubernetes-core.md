@@ -161,6 +161,75 @@ Same outcome with 2 replicas. `minAvailable: 1` reads as a guarantee ("I need at
 
 ---
 
+### 502 Bad Gateway After Deployment — Full Scenario
+
+> **The concept to understand first — "Green Deployment" ≠ "Traffic Healthy"**
+>
+> Jenkins marks a pipeline "SUCCESS" when the image is pushed to ECR and `values-dev.yaml` is updated. ArgoCD marks the app "Healthy" when all pods reach `Running` state and pass their readiness probe. But readiness probe only calls `/actuator/health` — Spring Boot returns 200 on that endpoint as soon as its HTTP server starts (~5 seconds), while the full app (DB connection pool, SQS client, Eureka) takes 30-60 more seconds. So pods pass readiness at second 5, get added to Service endpoints, start receiving traffic — and return 502 until second 60 when they're actually ready.
+>
+> **What 502 means:** the proxy (nginx or ALB) *reached* the pod but got a bad/no response. Different from 503 (no backend at all) or 504 (reached it, timed out).
+>
+> **Traffic path — always work outside-in:**
+> `User → ALB → nginx-ingress → K8s Service → Pod endpoints → Container`
+
+**[I] Deployment shows green in CI/CD and ArgoCD. Users are getting 502 errors. How do you troubleshoot?**
+
+**Step 1 — Rollback immediately.** Don't investigate while users are impacted.
+```bash
+kubectl rollout undo deployment/product-category -n ecom
+kubectl rollout status deployment/product-category -n ecom   # watch it go back
+```
+This restores the old pods within ~30 seconds. Now investigate.
+
+**Step 2 — Where is the 502 coming from?** Work outside-in.
+
+*ALB access logs* — check in CloudWatch or S3. Look at `target_status_code` column. If the ALB logged `502` with `target_status_code: -` it never reached a pod (routing issue). If it shows `502` with `target_status_code: 502` the pod itself returned 502.
+
+*nginx-ingress logs:*
+```bash
+kubectl logs -n ingress-nginx -l app.kubernetes.io/name=ingress-nginx --tail=100
+```
+nginx logs show `upstream` address and response code. 502 from nginx = upstream pod closed the connection or sent invalid HTTP.
+
+**Step 3 — Service endpoints.** The fastest check.
+```bash
+kubectl get endpoints product-category -n ecom
+```
+If this shows `<none>` or fewer pods than expected — pods failed readiness. That's the root cause right there. Traffic was routed but no healthy backend existed.
+
+**Step 4 — Pod state and readiness.**
+```bash
+kubectl get pods -n ecom                          # are new pods Running or CrashLoopBackOff?
+kubectl describe pod <new-pod-name> -n ecom       # look at Events — readiness probe failures?
+kubectl logs <new-pod-name> -n ecom               # startup errors?
+kubectl logs <new-pod-name> -n ecom --previous    # if it restarted — crash output
+```
+
+**Step 5 — Port mismatch check.**
+```bash
+# Container port in deployment — what port is the app listening on?
+kubectl get deployment product-category -n ecom -o jsonpath='{.spec.template.spec.containers[0].ports}'
+
+# Service target port — what port does the service forward to?
+kubectl get svc product-category -n ecom -o jsonpath='{.spec.ports}'
+```
+If `containerPort` is 8080 but `targetPort` is 8090 → every request hits a closed port → 502.
+
+**Root cause patterns — specific to "green but 502":**
+
+| Root Cause | Signal | Fix |
+|---|---|---|
+| Readiness probe fires too early | `kubectl get endpoints` shows pod then loses it | Add `startupProbe` with longer `failureThreshold` |
+| App takes 60s to start, readiness fires at 5s | 502s only during deploy window, clears after ~60s | `startupProbe: failureThreshold: 60, periodSeconds: 5` |
+| Container port ≠ service targetPort | `kubectl get endpoints` shows pod but 502 persists | Fix port in Deployment or Service |
+| New image has startup crash (missing env var, wrong DB URL) | `CrashLoopBackOff` on new pods | `kubectl logs --previous`, fix config, redeploy |
+| `maxUnavailable: 1` killed old pod before new was ready | 502 spike during deploy, then recovers | Set `maxUnavailable: 0, maxSurge: 1` |
+
+**The one-liner that shows senior thinking:**
+> "Deployment green means the scheduler is satisfied — all pods passed readiness probe. But readiness probe is only as good as what it tests. If it checks `/actuator/health` and that returns 200 before the DB connection pool is ready, pods receive live traffic while the app is still initialising. That gap is where 502s come from. The fix is `startupProbe` — gates traffic until the app is fully initialised, not just HTTP-responding."
+
+---
+
 ## 5. Security
 
 ### Cheat Sheet — the 6 layers
