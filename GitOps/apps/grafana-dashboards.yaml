@@ -1,0 +1,59 @@
+# =============================================================================
+#  grafana-dashboards.yaml — Task M5 ArgoCD Application (dashboards-as-code)
+# =============================================================================
+#  📖  WHAT THIS DOES:
+#        Root-app watches GitOps/apps/ → this file creates a new ArgoCD
+#        Application called `grafana-dashboards`. That Application in turn
+#        syncs everything in GitOps/dashboards/ — one ConfigMap per Grafana
+#        dashboard. Push a new ConfigMap to that dir → it appears in Grafana
+#        after one ArgoCD sync cycle (~3 min, faster if we trigger).
+#
+#  🏷️  WHY ConfigMaps IN `observability`:
+#        The kube-prometheus-stack Grafana pod has a sidecar container that
+#        watches ConfigMaps labeled `grafana_dashboard=1` across ALL
+#        namespaces (searchNamespace: ALL in the chart values). We put the
+#        dashboards next to Grafana itself — one namespace, one network
+#        policy boundary.
+#
+#  🔄  SYNC WAVE:
+#        sync-wave "3" → runs AFTER ecom-dev (wave 2) so the app namespace
+#        exists and the deployment names used in replica queries are live.
+#
+#  ➕  ADD MORE DASHBOARDS:
+#        Drop a new YAML (ConfigMap with `grafana_dashboard: "1"` label)
+#        into GitOps/dashboards/. ArgoCD picks it up automatically. No
+#        edit here needed.
+# =============================================================================
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: grafana-dashboards
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "3"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+
+  source:
+    repoURL: https://github.com/sanketire45/CartOps.git
+    targetRevision: main
+    path: GitOps/dashboards
+    directory:
+      # Only process real .yaml files in this dir (defense-in-depth —
+      # ignore any accidental junk left by editors).
+      include: "*.yaml"
+      recurse: false
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: observability   # dashboards live next to Grafana
+
+  syncPolicy:
+    automated:
+      prune: true     # remove ConfigMaps whose YAML is deleted from git
+      selfHeal: true  # re-apply if someone kubectl-edits a ConfigMap live
+    syncOptions:
+      - CreateNamespace=false   # observability ns owned by Terraform
+      - ServerSideApply=true

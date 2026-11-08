@@ -1,0 +1,388 @@
+# =============================================================================
+#  golden-signals-configmap.yaml — Task M5 primary dashboard
+# =============================================================================
+#  📖  WHAT THIS DOES:
+#        One ConfigMap carrying a Grafana dashboard JSON. The
+#        `grafana_dashboard: "1"` label is the trigger — Grafana's sidecar
+#        container watches ConfigMaps cluster-wide for that label and copies
+#        the JSON into Grafana's provisioning directory. Grafana then loads
+#        it on the next refresh. No clicking, no API call, pure declarative.
+#
+#  🎯  THE $service VARIABLE — the "one dashboard, all services" trick:
+#        templating.list[0] queries Prometheus for every unique value of the
+#        `service_name` label on `jvm_memory_used_bytes`. That becomes a
+#        dropdown. Pick product-category → every panel below filters to
+#        `service_name="product-category"`. Onboarding service #51 means
+#        zero dashboard work — it just appears in the dropdown.
+#
+#  📏  RED method (Rate / Errors / Duration):
+#        - Request Rate  = requests per second  (traffic signal)
+#        - Error Rate %  = 5xx / total          (reliability signal)
+#        - Latency p50/p95/p99                  (user-facing performance)
+#        Plus JVM saturation (heap + GC) and K8s state (replicas + CPU).
+#
+#  🔗  METRIC NAMES — these come from OTel's Prometheus remote-write
+#        exporter (see otel-gateway-values.yaml). They are:
+#          http_server_request_duration_seconds_{count,bucket,sum}
+#          jvm_memory_used_bytes, jvm_gc_duration_seconds_sum
+#          container_cpu_usage_seconds_total (cAdvisor native)
+#          kube_deployment_status_replicas_available (KSM native)
+# =============================================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboard-golden-signals
+  namespace: observability
+  labels:
+    # ⭐ The one label that matters — the sidecar picks this up.
+    grafana_dashboard: "1"
+  annotations:
+    # Grafana folder the dashboard lands in. Without it → "General" folder.
+    grafana_folder: "Ecom"
+data:
+  # Filename inside the sidecar's provisioning dir — must end in .json.
+  golden-signals.json: |
+    {
+      "annotations": { "list": [] },
+      "editable": true,
+      "fiscalYearStartMonth": 0,
+      "graphTooltip": 1,
+      "liveNow": false,
+      "schemaVersion": 39,
+      "timezone": "browser",
+      "title": "Golden Signals — Ecom Services",
+      "uid": "ecom-golden-signals",
+      "tags": ["ecom", "golden-signals", "red"],
+      "time": { "from": "now-1h", "to": "now" },
+      "refresh": "30s",
+      "timepicker": {},
+      "templating": {
+        "list": [
+          {
+            "name": "service",
+            "label": "Service",
+            "type": "query",
+            "datasource": { "type": "prometheus", "uid": "prometheus" },
+            "definition": "label_values(jvm_memory_used_bytes, service_name)",
+            "query": {
+              "query": "label_values(jvm_memory_used_bytes, service_name)",
+              "refId": "StandardVariableQuery"
+            },
+            "refresh": 1,
+            "includeAll": false,
+            "multi": false,
+            "sort": 1,
+            "regex": "",
+            "hide": 0
+          }
+        ]
+      },
+      "panels": [
+        {
+          "id": 1,
+          "type": "stat",
+          "title": "Request Rate",
+          "gridPos": { "x": 0, "y": 0, "w": 8, "h": 4 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [
+            {
+              "expr": "sum(rate(http_server_request_duration_seconds_count{service_name=\"$service\"}[5m]))",
+              "refId": "A",
+              "legendFormat": "req/s"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "reqps",
+              "decimals": 2,
+              "color": { "mode": "thresholds" },
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [{ "color": "green", "value": null }]
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "reduceOptions": { "calcs": ["lastNotNull"] },
+            "colorMode": "value",
+            "graphMode": "area",
+            "textMode": "auto"
+          }
+        },
+        {
+          "id": 2,
+          "type": "stat",
+          "title": "Error Rate (5xx %)",
+          "gridPos": { "x": 8, "y": 0, "w": 8, "h": 4 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [
+            {
+              "expr": "100 * sum(rate(http_server_request_duration_seconds_count{service_name=\"$service\", http_response_status_code=~\"5..\"}[5m])) / sum(rate(http_server_request_duration_seconds_count{service_name=\"$service\"}[5m]))",
+              "refId": "A",
+              "legendFormat": "5xx %"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percent",
+              "decimals": 2,
+              "color": { "mode": "thresholds" },
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "color": "green", "value": null },
+                  { "color": "yellow", "value": 1 },
+                  { "color": "red", "value": 5 }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "reduceOptions": { "calcs": ["lastNotNull"] },
+            "colorMode": "background",
+            "textMode": "auto"
+          }
+        },
+        {
+          "id": 3,
+          "type": "stat",
+          "title": "p99 Latency",
+          "gridPos": { "x": 16, "y": 0, "w": 8, "h": 4 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [
+            {
+              "expr": "histogram_quantile(0.99, sum by (le) (rate(http_server_request_duration_seconds_bucket{service_name=\"$service\"}[5m])))",
+              "refId": "A",
+              "legendFormat": "p99"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "s",
+              "decimals": 3,
+              "color": { "mode": "thresholds" },
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "color": "green", "value": null },
+                  { "color": "yellow", "value": 0.5 },
+                  { "color": "red", "value": 1.0 }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "reduceOptions": { "calcs": ["lastNotNull"] },
+            "colorMode": "value",
+            "graphMode": "area",
+            "textMode": "auto"
+          }
+        },
+        {
+          "id": 4,
+          "type": "timeseries",
+          "title": "Request Latency (p50 / p95 / p99)",
+          "gridPos": { "x": 0, "y": 4, "w": 24, "h": 8 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [
+            {
+              "expr": "histogram_quantile(0.5, sum by (le) (rate(http_server_request_duration_seconds_bucket{service_name=\"$service\"}[5m])))",
+              "refId": "A",
+              "legendFormat": "p50"
+            },
+            {
+              "expr": "histogram_quantile(0.95, sum by (le) (rate(http_server_request_duration_seconds_bucket{service_name=\"$service\"}[5m])))",
+              "refId": "B",
+              "legendFormat": "p95"
+            },
+            {
+              "expr": "histogram_quantile(0.99, sum by (le) (rate(http_server_request_duration_seconds_bucket{service_name=\"$service\"}[5m])))",
+              "refId": "C",
+              "legendFormat": "p99"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "s",
+              "custom": {
+                "drawStyle": "line",
+                "lineWidth": 2,
+                "fillOpacity": 10,
+                "pointSize": 5,
+                "showPoints": "never",
+                "spanNulls": true
+              },
+              "color": { "mode": "palette-classic" }
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+            "tooltip": { "mode": "multi", "sort": "desc" }
+          }
+        },
+        {
+          "id": 5,
+          "type": "timeseries",
+          "title": "JVM Memory Used",
+          "gridPos": { "x": 0, "y": 12, "w": 12, "h": 8 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [
+            {
+              "expr": "jvm_memory_used_bytes{service_name=\"$service\"}",
+              "refId": "A",
+              "legendFormat": "{{jvm_memory_type}} / {{jvm_memory_pool_name}}"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "bytes",
+              "custom": {
+                "drawStyle": "line",
+                "lineWidth": 2,
+                "fillOpacity": 10,
+                "showPoints": "never",
+                "spanNulls": true
+              },
+              "color": { "mode": "palette-classic" }
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+            "tooltip": { "mode": "multi" }
+          }
+        },
+        {
+          "id": 6,
+          "type": "timeseries",
+          "title": "GC Time (rate)",
+          "gridPos": { "x": 12, "y": 12, "w": 12, "h": 8 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [
+            {
+              "expr": "rate(jvm_gc_duration_seconds_sum{service_name=\"$service\"}[5m])",
+              "refId": "A",
+              "legendFormat": "{{jvm_gc_name}} / {{jvm_gc_action}}"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "s",
+              "custom": {
+                "drawStyle": "line",
+                "lineWidth": 2,
+                "fillOpacity": 10,
+                "showPoints": "never",
+                "spanNulls": true
+              },
+              "color": { "mode": "palette-classic" }
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+            "tooltip": { "mode": "multi" }
+          }
+        },
+        {
+          "id": 7,
+          "type": "stat",
+          "title": "Replicas (Available / Desired)",
+          "gridPos": { "x": 0, "y": 20, "w": 8, "h": 6 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [
+            {
+              "expr": "kube_deployment_status_replicas_available{namespace=\"ecom\", deployment=\"$service\"}",
+              "refId": "A",
+              "legendFormat": "Available"
+            },
+            {
+              "expr": "kube_deployment_spec_replicas{namespace=\"ecom\", deployment=\"$service\"}",
+              "refId": "B",
+              "legendFormat": "Desired"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "decimals": 0,
+              "color": { "mode": "palette-classic" }
+            },
+            "overrides": []
+          },
+          "options": {
+            "reduceOptions": { "calcs": ["lastNotNull"] },
+            "colorMode": "value",
+            "graphMode": "none",
+            "textMode": "value_and_name"
+          }
+        },
+        {
+          "id": 8,
+          "type": "timeseries",
+          "title": "Pod CPU",
+          "gridPos": { "x": 8, "y": 20, "w": 8, "h": 6 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [
+            {
+              "expr": "sum by (pod) (rate(container_cpu_usage_seconds_total{namespace=\"ecom\", pod=~\"$service.*\", container!=\"\"}[5m]))",
+              "refId": "A",
+              "legendFormat": "{{pod}}"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "decimals": 3,
+              "custom": {
+                "drawStyle": "line",
+                "lineWidth": 2,
+                "fillOpacity": 10,
+                "showPoints": "never"
+              },
+              "color": { "mode": "palette-classic" }
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+            "tooltip": { "mode": "multi" }
+          }
+        },
+        {
+          "id": 9,
+          "type": "timeseries",
+          "title": "Pod Memory (Working Set)",
+          "gridPos": { "x": 16, "y": 20, "w": 8, "h": 6 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [
+            {
+              "expr": "sum by (pod) (container_memory_working_set_bytes{namespace=\"ecom\", pod=~\"$service.*\", container!=\"\"})",
+              "refId": "A",
+              "legendFormat": "{{pod}}"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "bytes",
+              "custom": {
+                "drawStyle": "line",
+                "lineWidth": 2,
+                "fillOpacity": 10,
+                "showPoints": "never"
+              },
+              "color": { "mode": "palette-classic" }
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+            "tooltip": { "mode": "multi" }
+          }
+        }
+      ]
+    }
