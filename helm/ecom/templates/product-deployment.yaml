@@ -18,6 +18,14 @@ spec:
     metadata:
       labels:
         app: product-category
+      annotations:
+        {{- if .Values.tracing.enabled }}
+        # M2: tells the OTel Operator webhook to inject the Java agent as an
+        # init container when this pod is created. "ecom-java" references the
+        # Instrumentation CR (terraform/otel-instrumentation.tf). Removing
+        # this annotation + restarting the pod un-instruments it.
+        instrumentation.opentelemetry.io/inject-java: "ecom-java"
+        {{- end }}
     spec:
       serviceAccountName: product-category-sa   # Phase 3 #9: IRSA — gives this pod AWS identity
       terminationGracePeriodSeconds: 30

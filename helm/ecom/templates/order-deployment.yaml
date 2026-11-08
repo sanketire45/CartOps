@@ -18,6 +18,11 @@ spec:
     metadata:
       labels:
         app: order-service
+      annotations:
+        {{- if .Values.tracing.enabled }}
+        # M2: OTel Operator webhook injects the Java agent at pod creation.
+        instrumentation.opentelemetry.io/inject-java: "ecom-java"
+        {{- end }}
     spec:
       serviceAccountName: order-service-sa   # Phase 3 #9: IRSA — gives this pod AWS identity
       terminationGracePeriodSeconds: 30

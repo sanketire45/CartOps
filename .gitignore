@@ -2,6 +2,8 @@
 CLAUDE.md
 TASKS.md
 Data/
+Interview/
+observability-stack-decision.md
 
 # ── macOS ──────────────────────────────────────────────────────────────────────
 .DS_Store
@@ -42,6 +44,9 @@ terraform/*.tfstate.*
 terraform/*.tfplan
 terraform/tfplan.binary
 terraform/tfplan.txt
+# Also ignore tfstate at REPO ROOT (safety — state can leak secrets)
+*.tfstate
+*.tfstate.*
 *.auto.tfvars
 secrets.tfvars
 

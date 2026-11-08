@@ -34,3 +34,13 @@ notificationWorker:
     enabled: true
     maxReplicas: 5
     queueLength: "5"
+
+# M2: OTel auto-instrumentation flag.
+# When true, each Spring Boot Deployment's pod template carries the annotation
+# `instrumentation.opentelemetry.io/inject-java: "ecom-java"`. On pod creation
+# the OTel Operator's mutating webhook adds an init container that drops the
+# Java agent into a shared volume and sets JAVA_TOOL_OPTIONS so the JVM
+# attaches it at startup. Zero source change, zero image rebuild.
+# Flip off and redeploy to disable instrumentation across the fleet quickly.
+tracing:
+  enabled: true

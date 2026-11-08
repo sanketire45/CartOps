@@ -1,0 +1,144 @@
+# =============================================================================
+#  otel-agent-values.yaml — OTel Collector in DaemonSet (agent) mode
+# =============================================================================
+#  Role: receive OTLP on each node, read container log files, forward
+#        everything to the central gateway. NO enrichment, NO sampling.
+#        Keep it lean so it never OOMs and takes app-pod telemetry down
+#        with it.
+# =============================================================================
+
+# ── Resources: lean DaemonSet pod, one per node ──────────────────────────────
+resources:
+  requests:
+    cpu: 100m
+    memory: 192Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi   # memory_limiter below is set to 400Mi — stays under this
+
+# ── Presets: Helm-chart shortcuts that wire up volumes + RBAC + config ───────
+presets:
+  # Reads /var/log/pods and /var/log/containers from the host (hostPath volume
+  # mounts + filelog receiver auto-added). Replaces Fluent Bit entirely.
+  logsCollection:
+    enabled: true
+    # Don't include the collector's OWN logs in the pipeline — would loop.
+    # includeCollectorLogs covers only the agent's own pod — not the gateway's.
+    # To also exclude the gateway (and all future observability-stack pods:
+    # Prometheus, Grafana, ES, Tempo), override the filelog receiver's
+    # `exclude` list in config.receivers below.
+    includeCollectorLogs: false
+
+  # DO NOT enable hostMetrics — we use native node-exporter instead (standard
+  # metric names, dashboards work out of the box). This is the hybrid rule.
+  hostMetrics:
+    enabled: false
+
+  # DO NOT enable kubeletMetrics on the agent — Prometheus will scrape
+  # /metrics/cadvisor + /metrics/resource from the kubelet directly (M3).
+  kubeletMetrics:
+    enabled: false
+
+  # Enrichment belongs on the GATEWAY, not the agent. Keep agent lean.
+  kubernetesAttributes:
+    enabled: false
+
+# ── Collector config — this is the actual OTel Collector YAML ────────────────
+config:
+
+  # ── RECEIVERS: how telemetry arrives at the agent ──────────────────────────
+  receivers:
+    otlp:
+      protocols:
+        grpc:
+          # 0.0.0.0 so pods on the same node can reach it via hostPort (below)
+          # or via the headless Service. Localhost would only work for the
+          # collector itself.
+          endpoint: 0.0.0.0:4317
+        http:
+          endpoint: 0.0.0.0:4318
+
+    # filelog receiver is INJECTED by the logsCollection preset — it tails
+    # /var/log/pods/*/*/*.log, parses CRI format, extracts pod/container/
+    # namespace from the path. We OVERRIDE just the exclude list here to
+    # skip the whole observability namespace (gateway, Prometheus, Grafana,
+    # Tempo, ES, Kibana — every observability-stack pod). This prevents the
+    # "debug exporter logs the gateway's own log that was collected from the
+    # gateway's log file" feedback loop.
+    filelog:
+      exclude:
+        - /var/log/pods/observability_*/*/*.log
+
+  # ── PROCESSORS: what we do with telemetry before forwarding ────────────────
+  # Order matters: memory_limiter MUST be first in every pipeline.
+  processors:
+    memory_limiter:
+      # Check memory every 1s — react fast to bursts.
+      check_interval: 1s
+      # Soft cap at 400MiB — if exceeded, start refusing data at the receiver
+      # (back-pressure to app pods via gRPC flow control) instead of OOMing.
+      limit_mib: 400
+      # Spike buffer: if a 100MiB jump is detected, refuse early.
+      spike_limit_mib: 100
+
+    batch:
+      # Flush when either condition hits: 1s elapsed OR 1024 items queued.
+      # Trades a bit of latency for fewer gateway network round-trips.
+      timeout: 1s
+      send_batch_size: 1024
+      send_batch_max_size: 2048
+
+  # ── EXPORTERS: where data goes OUT of the agent ────────────────────────────
+  exporters:
+    # Just ONE exporter: forward every signal to the central gateway.
+    # Agent never exports directly to Prometheus/ES/Tempo — gateway does that.
+    otlp:
+      # Service discovery: Helm names the gateway service like this.
+      # observability = namespace. :4317 = OTLP/gRPC.
+      endpoint: otel-gateway-opentelemetry-collector.observability.svc.cluster.local:4317
+      tls:
+        # In-cluster traffic over plain gRPC for now.
+        # Switch to mTLS once cert-manager lands (task #36).
+        insecure: true
+      # Short retry — if the gateway is restarting, buffer briefly then drop.
+      # Dropping is preferable to OOMing the agent.
+      sending_queue:
+        enabled: true
+        num_consumers: 4
+        queue_size: 1000
+      retry_on_failure:
+        enabled: true
+        initial_interval: 1s
+        max_interval: 10s
+        max_elapsed_time: 30s
+
+  # ── SERVICE: wire receivers → processors → exporters into pipelines ────────
+  service:
+    telemetry:
+      # The collector emits its OWN metrics on :8888 — Prometheus can scrape
+      # these later (M3) via a ServiceMonitor to monitor the collector itself.
+      metrics:
+        address: 0.0.0.0:8888
+    pipelines:
+      # Traces pipeline: pod → agent → gateway. No sampling on the agent;
+      # tail_sampling runs on the gateway (where it sees the whole trace).
+      traces:
+        receivers:  [otlp]
+        processors: [memory_limiter, batch]
+        exporters:  [otlp]
+
+      # Metrics pipeline: app-emitted metrics only. Platform metrics
+      # (node-exporter, kube-state-metrics, cAdvisor) use native Prometheus
+      # scrape — they do NOT flow through here.
+      metrics:
+        receivers:  [otlp]
+        processors: [memory_limiter, batch]
+        exporters:  [otlp]
+
+      # Logs pipeline: filelog receiver (injected by preset) reads container
+      # log files from the host, OTLP receiver accepts in-process logs from
+      # OTel-instrumented apps (M2).
+      logs:
+        receivers:  [otlp, filelog]
+        processors: [memory_limiter, batch]
+        exporters:  [otlp]

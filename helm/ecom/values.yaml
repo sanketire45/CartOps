@@ -58,3 +58,10 @@ ingress:
   className: nginx
   host: ecom.local
   annotations: {}
+
+# M2: OTel auto-instrumentation. Default OFF — opt in per environment
+# (values-dev.yaml / values-prod.yaml). When true, each Spring Boot pod
+# template gets the inject-java annotation and the Operator rewrites the
+# pod spec at creation to attach the Java agent.
+tracing:
+  enabled: false

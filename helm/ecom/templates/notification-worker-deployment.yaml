@@ -18,6 +18,11 @@ spec:
     metadata:
       labels:
         app: notification-worker
+      annotations:
+        {{- if .Values.tracing.enabled }}
+        # M2: OTel Operator webhook injects the Java agent at pod creation.
+        instrumentation.opentelemetry.io/inject-java: "ecom-java"
+        {{- end }}
     spec:
       serviceAccountName: notification-worker-sa   # IRSA — SQS ReceiveMessage + DeleteMessage only
       terminationGracePeriodSeconds: 30
