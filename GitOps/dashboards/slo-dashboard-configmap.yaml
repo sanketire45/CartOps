@@ -83,9 +83,9 @@ data:
             "label": "SLO",
             "type": "query",
             "datasource": { "type": "prometheus", "uid": "prometheus" },
-            "definition": "label_values(slo:objective:ratio{sloth_service=\"$service\",sloth_slo=\"$slo\"}, sloth_slo)",
+            "definition": "label_values(slo:objective:ratio{sloth_service=\"$service\"}, sloth_slo)",
             "query": {
-              "query": "label_values(slo:objective:ratio{sloth_service=\"$service\",sloth_slo=\"$slo\"}, sloth_slo)",
+              "query": "label_values(slo:objective:ratio{sloth_service=\"$service\"}, sloth_slo)",
               "refId": "StandardVariableQuery"
             },
             "refresh": 2,
