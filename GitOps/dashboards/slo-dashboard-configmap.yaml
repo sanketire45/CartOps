@@ -182,7 +182,7 @@ data:
           "targets": [
             {
               "refId": "A",
-              "expr": "slo:sli_error:ratio_rate1h{sloth_service=\"$service\"} / (1 - slo:objective:ratio{sloth_service=\"$service\"})"
+              "expr": "slo:sli_error:ratio_rate1h{sloth_service=\"$service\"} / ignoring(sloth_window) group_left() (1 - slo:objective:ratio{sloth_service=\"$service\"})"
             }
           ],
           "fieldConfig": {
