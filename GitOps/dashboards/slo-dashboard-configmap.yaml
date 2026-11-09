@@ -101,7 +101,7 @@ data:
         {
           "id": 1,
           "type": "stat",
-          "title": "Current Availability (30d)",
+          "title": "Current compliance — $service / $slo (30d)",
           "gridPos": { "h": 6, "w": 6, "x": 0, "y": 0 },
           "datasource": { "type": "prometheus", "uid": "prometheus" },
           "targets": [
@@ -134,7 +134,7 @@ data:
         {
           "id": 2,
           "type": "stat",
-          "title": "SLO Objective",
+          "title": "Target — $slo",
           "gridPos": { "h": 6, "w": 6, "x": 6, "y": 0 },
           "datasource": { "type": "prometheus", "uid": "prometheus" },
           "targets": [
@@ -227,14 +227,14 @@ data:
         {
           "id": 5,
           "type": "timeseries",
-          "title": "Availability over time (1h window)",
+          "title": "$slo compliance over time (1h window)",
           "gridPos": { "h": 9, "w": 12, "x": 0, "y": 6 },
           "datasource": { "type": "prometheus", "uid": "prometheus" },
           "targets": [
             {
               "refId": "A",
               "expr": "100 * (1 - slo:sli_error:ratio_rate1h{sloth_service=\"$service\",sloth_slo=\"$slo\"})",
-              "legendFormat": "Availability % (1h)"
+              "legendFormat": "$slo compliance % (1h)"
             },
             {
               "refId": "B",
