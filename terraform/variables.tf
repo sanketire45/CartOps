@@ -56,8 +56,8 @@ variable "node_min_size" {
 }
 
 variable "node_max_size" {
-  description = "Most worker nodes the group may scale to (eksctl --nodes-max)"
-  default     = 2
+  description = "Most worker nodes the group may scale to (eksctl --nodes-max). Raised to 5 for Cluster Autoscaler (#26a) — CA needs headroom above desired_size or it can never scale up."
+  default     = 5
 }
 
 variable "node_volume_size" {
@@ -71,6 +71,19 @@ variable "node_volume_size" {
 variable "extra_admin_role_arn" {
   description = "IAM role ARN to grant cluster-admin access (e.g. Jenkins CI role). Leave empty to skip."
   default     = ""
+}
+
+# ---------------------------------------------------------------------------
+# M7 — Alertmanager Slack integration
+# ---------------------------------------------------------------------------
+# Incoming-webhook URL from a Slack App (api.slack.com/apps → Incoming
+# Webhooks). Treated as a bearer token — anyone with this URL can post to
+# the channel it's bound to. Keep it ONLY in secrets.auto.tfvars (gitignored),
+# never in a .tf file or committed values.yaml.
+variable "slack_webhook_url" {
+  description = "Slack incoming webhook URL used by Alertmanager to post alerts."
+  type        = string
+  sensitive   = true
 }
 
 # ---------------------------------------------------------------------------

@@ -1,0 +1,288 @@
+# =============================================================================
+#  kube-prometheus-stack-values.yaml — M3 metrics plane config (dev-tier)
+# =============================================================================
+#  Design decisions baked in:
+#    • Retention 1d (keep metrics for one day — matches daily apply/destroy
+#      cycles. Prod would be 15d-30d + Thanos S3 long-term)
+#    • Native scrape for node-exporter + KSM + cAdvisor (standard metric names
+#      → community dashboards work)
+#    • Remote-write receiver ON so OTel gateway can push app metrics in
+#    • All selectors set to "watch everything in cluster" — services onboard
+#      by label, not by chart wiring
+# =============================================================================
+
+# ============================================================================
+# PROMETHEUS
+# ============================================================================
+prometheus:
+  prometheusSpec:
+    # ── Retention: 1 day of metrics on disk ───────────────────────────────────
+    retention: 1d
+    # Hard disk cap too — belt-and-braces to prevent runaway disk growth
+    retentionSize: "4GB"
+
+    # ── Persistent storage (EBS gp2 via EKS default StorageClass) ────────────
+    storageSpec:
+      volumeClaimTemplate:
+        spec:
+          storageClassName: gp2
+          accessModes: ["ReadWriteOnce"]
+          resources:
+            requests:
+              storage: 5Gi
+
+    # ── THE selector knobs — the "50+ services onboard by label" lever ───────
+    # Default behavior: Prometheus only picks up ServiceMonitor / PodMonitor /
+    # PrometheusRule objects labeled with the chart's release name. That's a
+    # huge scale footgun. Setting these to `false` makes Prometheus watch
+    # EVERY such object in the cluster, regardless of label — services
+    # onboard just by creating a ServiceMonitor.
+    serviceMonitorSelectorNilUsesHelmValues: false
+    podMonitorSelectorNilUsesHelmValues: false
+    probeSelectorNilUsesHelmValues: false
+    ruleSelectorNilUsesHelmValues: false
+
+    # ── ⭐ Remote-write receiver — lets OTel gateway PUSH into Prometheus ────
+    # Without this, Prometheus is scrape-only. With it, OTel gateway's
+    # `prometheusremotewrite` exporter can send app metrics directly.
+    enableRemoteWriteReceiver: true
+
+    # ── Resources — Prometheus is memory-heavy; lean dev caps ────────────────
+    resources:
+      requests:
+        cpu: 200m
+        memory: 1Gi
+      limits:
+        cpu: "1"
+        memory: 2Gi
+
+    # ── Don't drop unknown labels during scrape; keep rich dimensionality
+    # for our few dev services. At scale you'd use metric_relabel_configs
+    # to cut cardinality (never label by user_id, request_id, trace_id).
+    enableAdminAPI: false
+
+# Prometheus Service — ClusterIP (access via port-forward for dev)
+  service:
+    type: ClusterIP
+
+# ============================================================================
+# GRAFANA
+# ============================================================================
+grafana:
+  # Dev password — chart default. Change for production or wire to ESO + SM.
+  adminPassword: "prom-operator"
+
+  # ── Persist dashboards/users across pod restarts ──────────────────────────
+  persistence:
+    enabled: true
+    type: pvc
+    accessModes: ["ReadWriteOnce"]
+    size: 1Gi
+    storageClassName: gp2
+
+  # ── Sidecar — the "dashboards-as-code" mechanism ──────────────────────────
+  # A sidecar container watches the cluster for ConfigMaps labeled
+  # `grafana_dashboard=1` and copies them into Grafana's provisioning dir.
+  # Same for datasources with `grafana_datasource=1`.
+  # → In M5 we commit dashboard JSON as ConfigMaps in git, ArgoCD syncs,
+  #   sidecar picks them up. No clicking, versioned, rollback-able.
+  sidecar:
+    dashboards:
+      enabled: true
+      label: grafana_dashboard
+      searchNamespace: ALL
+      provider:
+        allowUiUpdates: true    # dev convenience — can click-edit live;
+                                # remove in prod so git stays the source of truth
+    datasources:
+      enabled: true
+      label: grafana_datasource
+      searchNamespace: ALL
+
+  service:
+    type: ClusterIP
+
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+# ============================================================================
+# ALERTMANAGER — M7: Slack routing
+# ============================================================================
+# Flow:  Prometheus fires alert → Alertmanager groups + dedupes → POSTs to
+#        Slack webhook. Watchdog goes to `null` so it doesn't spam Slack.
+# Secret: alertmanager-slack-webhook (terraform/alertmanager-secret.tf)
+#   Mounted at /etc/alertmanager/secrets/alertmanager-slack-webhook/url
+#   Referenced below as `api_url_file:` so the raw URL never lands in the
+#   Alertmanager-generated config Secret either.
+alertmanager:
+  alertmanagerSpec:
+    # Tiny retention — alerts route to Slack, no need to keep long logs
+    retention: 24h
+
+    # Mount our K8s Secret into the Alertmanager pod. The chart mounts it at
+    # /etc/alertmanager/secrets/<secret-name>/<key>. Required by api_url_file.
+    secrets:
+      - alertmanager-slack-webhook
+
+    storage:
+      volumeClaimTemplate:
+        spec:
+          storageClassName: gp2
+          accessModes: ["ReadWriteOnce"]
+          resources:
+            requests:
+              storage: 1Gi
+
+    resources:
+      requests:
+        cpu: 50m
+        memory: 128Mi
+      limits:
+        cpu: 200m
+        memory: 256Mi
+
+  service:
+    type: ClusterIP
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # The Alertmanager config itself. kube-prom-stack writes this verbatim
+  # into a Secret and mounts it into the Alertmanager pod.
+  # ─────────────────────────────────────────────────────────────────────────
+  config:
+    global:
+      # How long after an alert's last firing to consider it RESOLVED
+      resolve_timeout: 5m
+
+    # ── ROUTING TREE ─────────────────────────────────────────────────────
+    # Top route = catch-all. Children = exceptions matched first (first-match
+    # wins unless `continue: true`).
+    route:
+      receiver: slack-default
+      # Collapse alerts that share these labels into one Slack message —
+      # keeps the channel readable when 20 pods alert at once.
+      group_by: ['alertname', 'sloth_service', 'severity']
+      # Wait a bit after the first alert before sending, in case more arrive
+      group_wait: 30s
+      # If more alerts join the group, wait this long before re-sending
+      group_interval: 5m
+      # Still firing after this → re-ping Slack
+      repeat_interval: 4h
+      routes:
+        # Watchdog ALWAYS fires (dead-man's switch). Silence from Slack —
+        # we check it in Alertmanager's UI directly.
+        - matchers:
+            - alertname = "Watchdog"
+          receiver: 'null'
+
+    # ── RECEIVERS ────────────────────────────────────────────────────────
+    receivers:
+      # Built-in "swallow it" receiver (for Watchdog etc.)
+      - name: 'null'
+
+      # Our one real receiver — posts to Slack via the webhook URL
+      - name: slack-default
+        slack_configs:
+          - api_url_file: /etc/alertmanager/secrets/alertmanager-slack-webhook/url
+            # Also tell Slack when the alert resolves (nice to have)
+            send_resolved: true
+            # Rich message layout — emoji by status, summary + labels
+            title: '{{ if eq .Status "firing" }}:rotating_light:{{ else }}:white_check_mark:{{ end }} [{{ (index .Alerts 0).Labels.severity | toUpper }}] {{ .GroupLabels.alertname }}'
+            text: |-
+              {{ range .Alerts -}}
+              *Service:* `{{ .Labels.sloth_service }}`
+              *SLO:* {{ .Labels.sloth_slo }}
+              *Severity:* `{{ .Labels.severity }}`
+              *Summary:* {{ .Annotations.summary }}
+              *Started:* {{ .StartsAt.Format "2006-01-02 15:04 MST" }}
+              {{ if .Annotations.runbook_url -}}*Runbook:* {{ .Annotations.runbook_url }}{{- end }}
+              {{ end }}
+
+    # ── INHIBITION ───────────────────────────────────────────────────────
+    # When a `critical` alert fires, suppress its matching `warning` twin for
+    # the same alertname + service. Prevents double-pinging Slack on the same
+    # issue (SLO burn rate commonly trips BOTH the ticket and page alerts).
+    inhibit_rules:
+      - source_matchers:
+          - severity = "critical"
+        target_matchers:
+          - severity = "warning"
+        equal: ['alertname', 'sloth_service']
+
+# ============================================================================
+# EXPORTERS — native Prometheus scrape (NOT through OTel)
+# These emit the STANDARD metric names dashboards and alert rules expect.
+# ============================================================================
+
+# node-exporter DaemonSet — OS metrics per node
+# Produces: node_cpu_seconds_total, node_memory_MemAvailable_bytes,
+#           node_filesystem_avail_bytes, node_network_receive_bytes_total...
+nodeExporter:
+  enabled: true
+
+prometheus-node-exporter:
+  resources:
+    requests:
+      cpu: 20m
+      memory: 32Mi
+    limits:
+      cpu: 100m
+      memory: 64Mi
+
+# kube-state-metrics Deployment — K8s API → metrics
+# Produces: kube_pod_status_phase, kube_deployment_status_replicas,
+#           kube_hpa_status_current_replicas, kube_node_status_condition...
+kubeStateMetrics:
+  enabled: true
+
+kube-state-metrics:
+  resources:
+    requests:
+      cpu: 20m
+      memory: 32Mi
+    limits:
+      cpu: 100m
+      memory: 128Mi
+
+# ============================================================================
+# DEFAULT SCRAPE TARGETS — enabled by default; keep for cluster-health dashboards
+# ============================================================================
+# These are built-in ServiceMonitors for the control-plane bits EKS doesn't
+# expose (etcd, scheduler, controller-manager) — leave off since EKS manages
+# the control plane for us. kubelet + apiserver + coredns stay on.
+kubeApiServer:
+  enabled: true
+kubelet:
+  enabled: true
+coreDns:
+  enabled: true
+
+# On EKS, AWS manages the control plane — these endpoints aren't reachable:
+kubeControllerManager:
+  enabled: false
+kubeScheduler:
+  enabled: false
+kubeEtcd:
+  enabled: false
+kubeProxy:
+  enabled: true
+
+# Prometheus Operator itself — no CRD-level customization needed
+prometheusOperator:
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: 200m
+      memory: 256Mi
+
+# Chart-shipped default rules — keep on. Battle-tested alerts for cluster
+# health (KubePodCrashLooping, KubeNodeNotReady, KubeHpaMaxedOut, etc.)
+# that would take weeks to write from scratch.
+defaultRules:
+  create: true
