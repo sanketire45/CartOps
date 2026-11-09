@@ -64,12 +64,12 @@ spec:
       # division per window.
       sli:
         events:
-          error_query: |
+          errorQuery: |
             sum(rate(http_server_request_duration_seconds_count{
                 service_name="product-category",
                 http_response_status_code=~"5.."
             }[{{.window}}]))
-          total_query: |
+          totalQuery: |
             sum(rate(http_server_request_duration_seconds_count{
                 service_name="product-category"
             }[{{.window}}]))
@@ -82,11 +82,11 @@ spec:
         annotations:
           summary: "product-category availability SLO is burning"
           runbook_url: "https://wiki.example.com/runbooks/slo-availability"
-        page_alert:
+        pageAlert:
           labels:
             severity: critical
             route: pager
-        ticket_alert:
+        ticketAlert:
           labels:
             severity: warning
             route: ticket
