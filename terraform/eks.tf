@@ -150,7 +150,15 @@ resource "aws_eks_node_group" "this" {
   scaling_config {
     desired_size = var.node_desired_size # 2
     min_size     = var.node_min_size     # 2
-    max_size     = var.node_max_size     # 2
+    max_size     = var.node_max_size     # 5 — raised for Cluster Autoscaler (#26a)
+  }
+
+  # Cluster Autoscaler discovers ASGs by scanning for these two tags.
+  # EKS propagates node group tags down to the underlying ASG automatically.
+  # Without them CA sits idle — it never knows this ASG exists.
+  tags = {
+    "k8s.io/cluster-autoscaler/enabled"        = "true"
+    "k8s.io/cluster-autoscaler/${var.cluster_name}" = "owned"
   }
 
   # Wire our custom launch template — EKS passes this to the underlying ASG it manages.
