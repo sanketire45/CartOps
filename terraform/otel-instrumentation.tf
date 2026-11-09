@@ -136,10 +136,20 @@ resource "kubernetes_manifest" "ecom_java_instrumentation" {
         image = "ghcr.io/open-telemetry/opentelemetry-operator/autoinstrumentation-java:2.10.0"
       }
 
-      # ── Where telemetry goes: node-local OTel agent via hostPort 4317.
+      # ── Where telemetry goes: node-local OTel agent via hostPort 4318 (HTTP).
       # $(NODE_IP) is resolved at container start from the env var below.
+      #
+      # ⚠️ Port 4318 = OTLP/HTTP, NOT 4317 (gRPC).
+      # OTel Java agent 2.x defaults to OTLP protocol `http/protobuf`. If we
+      # point it at the gRPC port (4317) with an http:// URL, the exporter
+      # throws "Connection reset" on every batch (server speaks gRPC, client
+      # speaks HTTP). Keep the agent's auto-detected default by matching the
+      # URL: http:// + port 4318. Alternative would be
+      # OTEL_EXPORTER_OTLP_PROTOCOL=grpc + port 4317, but matching the default
+      # is cleaner and interview-safe ("I used OTLP/HTTP for Java apps since
+      # that's the 2.x default — simpler firewall rules, no port confusion").
       exporter = {
-        endpoint = "http://$(NODE_IP):4317"
+        endpoint = "http://$(NODE_IP):4318"
       }
 
       # ── Trace-context propagators across service calls.

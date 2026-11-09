@@ -124,14 +124,23 @@ config:
       sampling_initial: 2
       sampling_thereafter: 100
 
+    # ── M3 LIVE: push app metrics into kube-prometheus-stack via remote_write.
+    # The chart's Prometheus service DNS name differs from the Operator's bare
+    # "prometheus-operated" — the kube-prometheus-stack chart exposes it as
+    # `kube-prom-stack-kube-prome-prometheus`. Port 9090 /api/v1/write is the
+    # Prometheus remote-write receiver endpoint (enabled by the chart's
+    # `enableRemoteWriteReceiver: true` knob).
+    prometheusremotewrite:
+      endpoint: http://kube-prom-stack-kube-prome-prometheus.observability.svc.cluster.local:9090/api/v1/write
+      tls:
+        insecure: true
+      # Convert OTel resource attributes (k8s.namespace.name, deployment.environment,
+      # service.name, host.name) into Prometheus LABELS on every sample.
+      # Without this, metrics would arrive without k8s context — unusable in dashboards.
+      resource_to_telemetry_conversion:
+        enabled: true
+
     # ── Future exporters — kept commented until the backends exist. ──────────
-    #
-    # prometheusremotewrite:                                   # M3
-    #   endpoint: http://prometheus-operated.observability.svc.cluster.local:9090/api/v1/write
-    #   tls:
-    #     insecure: true
-    #   resource_to_telemetry_conversion:
-    #     enabled: true   # k8sattributes labels become Prometheus labels
     #
     # elasticsearch:                                           # M10
     #   endpoints: [https://elasticsearch-es-http.observability.svc.cluster.local:9200]
@@ -170,11 +179,13 @@ config:
 
       # Metrics: receive → limit → enrich → batch → export
       # NO tail_sampling — not a trace concept.
+      # M3 live: exporter swapped from debug to prometheusremotewrite.
+      # App metrics (http.server.request.duration, jvm.memory.used, Hikari pool,
+      # Spring MVC counters) now land in Prometheus and become queryable in Grafana.
       metrics:
         receivers:  [otlp]
         processors: [memory_limiter, k8sattributes, batch]
-        exporters:  [debug]
-        # When M3 lands → swap `debug` for `[prometheusremotewrite]`.
+        exporters:  [prometheusremotewrite]
 
       # Logs: receive → limit → enrich → batch → export
       logs:
