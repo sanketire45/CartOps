@@ -1,0 +1,315 @@
+# =============================================================================
+#  slo-dashboard-configmap.yaml — Task M6 SLO dashboard (dashboards-as-code)
+# =============================================================================
+#  📖  WHAT THIS DOES:
+#        One ConfigMap carrying a Grafana dashboard JSON that reads the
+#        recording rules Sloth generates from GitOps/slos/*.yaml:
+#          slo:sli_error:ratio_rate{5m,30m,1h,6h,1d,3d,30d}
+#          slo:objective:ratio
+#        and derives all the panels below from them (no raw http_* queries).
+#
+#  🎯  THE $service VARIABLE — one dashboard, every SLO:
+#        templating.list[0] queries Prometheus for every unique
+#        `sloth_service` label value (product-category, order-service, …).
+#        Pick one → every panel filters to that service's SLO.
+#
+#  🧮  THE 4 DERIVED NUMBERS (what the stat panels show):
+#        • Current Availability (30d)
+#            100 * (1 - slo:sli_error:ratio_rate30d)
+#        • SLO Objective
+#            100 * slo:objective:ratio
+#        • Error Budget Remaining %
+#            100 * (1 - (ratio_rate30d / (1 - objective:ratio)))
+#            = how much of the budget we HAVEN'T burned yet
+#        • Burn Rate (1h)
+#            ratio_rate1h / (1 - objective:ratio)
+#            = how many hours of monthly budget we burn per hour
+#            1x = on pace, >1x = burning too fast, 14.4x = CRITICAL
+#
+#  🔗  DEPENDS ON:
+#        Sloth-generated recording rules must exist. That means:
+#          1. terraform/sloth.tf applied (operator running)
+#          2. GitOps/slos/*.yaml synced (CRs created)
+#          3. Sloth emitted PrometheusRule into `observability` ns
+#          4. Prometheus picked it up (~30s)
+#        Until all four, this dashboard will show "No data" — expected.
+# =============================================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboard-slo
+  namespace: observability
+  labels:
+    grafana_dashboard: "1"
+  annotations:
+    grafana_folder: "Ecom"
+data:
+  slo.json: |
+    {
+      "annotations": { "list": [] },
+      "editable": true,
+      "fiscalYearStartMonth": 0,
+      "graphTooltip": 1,
+      "liveNow": false,
+      "schemaVersion": 39,
+      "timezone": "browser",
+      "title": "SLO — Ecom Services",
+      "uid": "ecom-slo",
+      "tags": ["ecom", "slo", "sloth"],
+      "time": { "from": "now-6h", "to": "now" },
+      "refresh": "30s",
+      "timepicker": {},
+      "templating": {
+        "list": [
+          {
+            "name": "service",
+            "label": "Service",
+            "type": "query",
+            "datasource": { "type": "prometheus", "uid": "prometheus" },
+            "definition": "label_values(slo:objective:ratio, sloth_service)",
+            "query": {
+              "query": "label_values(slo:objective:ratio, sloth_service)",
+              "refId": "StandardVariableQuery"
+            },
+            "refresh": 1,
+            "includeAll": false,
+            "multi": false,
+            "sort": 1,
+            "regex": "",
+            "hide": 0
+          }
+        ]
+      },
+      "panels": [
+        {
+          "id": 1,
+          "type": "stat",
+          "title": "Current Availability (30d)",
+          "gridPos": { "h": 6, "w": 6, "x": 0, "y": 0 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "100 * (1 - slo:sli_error:ratio_rate30d{sloth_service=\"$service\"})"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percent",
+              "decimals": 3,
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "color": "red", "value": null },
+                  { "color": "yellow", "value": 99.0 },
+                  { "color": "green", "value": 99.5 }
+                ]
+              }
+            }
+          },
+          "options": {
+            "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+            "colorMode": "background",
+            "graphMode": "area",
+            "textMode": "value_and_name"
+          }
+        },
+        {
+          "id": 2,
+          "type": "stat",
+          "title": "SLO Objective",
+          "gridPos": { "h": 6, "w": 6, "x": 6, "y": 0 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "100 * slo:objective:ratio{sloth_service=\"$service\"}"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percent",
+              "decimals": 2,
+              "color": { "mode": "fixed", "fixedColor": "blue" }
+            }
+          },
+          "options": {
+            "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+            "colorMode": "value",
+            "graphMode": "none",
+            "textMode": "value_and_name"
+          }
+        },
+        {
+          "id": 3,
+          "type": "stat",
+          "title": "Error Budget Remaining",
+          "gridPos": { "h": 6, "w": 6, "x": 12, "y": 0 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "100 * (1 - (slo:sli_error:ratio_rate30d{sloth_service=\"$service\"} / (1 - slo:objective:ratio{sloth_service=\"$service\"})))"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percent",
+              "decimals": 1,
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "color": "red", "value": null },
+                  { "color": "yellow", "value": 25 },
+                  { "color": "green", "value": 50 }
+                ]
+              }
+            }
+          },
+          "options": {
+            "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+            "colorMode": "background",
+            "graphMode": "area",
+            "textMode": "value_and_name"
+          }
+        },
+        {
+          "id": 4,
+          "type": "stat",
+          "title": "Burn Rate (1h)",
+          "gridPos": { "h": 6, "w": 6, "x": 18, "y": 0 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "slo:sli_error:ratio_rate1h{sloth_service=\"$service\"} / (1 - slo:objective:ratio{sloth_service=\"$service\"})"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "none",
+              "decimals": 2,
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "color": "green", "value": null },
+                  { "color": "yellow", "value": 3 },
+                  { "color": "orange", "value": 6 },
+                  { "color": "red", "value": 14.4 }
+                ]
+              }
+            }
+          },
+          "options": {
+            "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+            "colorMode": "background",
+            "graphMode": "area",
+            "textMode": "value_and_name"
+          }
+        },
+        {
+          "id": 5,
+          "type": "timeseries",
+          "title": "Availability over time (1h window)",
+          "gridPos": { "h": 9, "w": 12, "x": 0, "y": 6 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "100 * (1 - slo:sli_error:ratio_rate1h{sloth_service=\"$service\"})",
+              "legendFormat": "Availability % (1h)"
+            },
+            {
+              "refId": "B",
+              "expr": "100 * slo:objective:ratio{sloth_service=\"$service\"}",
+              "legendFormat": "Objective"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percent",
+              "custom": {
+                "drawStyle": "line",
+                "lineWidth": 2,
+                "fillOpacity": 10
+              },
+              "min": 95,
+              "max": 100
+            },
+            "overrides": [
+              {
+                "matcher": { "id": "byName", "options": "Objective" },
+                "properties": [
+                  { "id": "custom.lineStyle", "value": { "fill": "dash", "dash": [10, 10] } },
+                  { "id": "color", "value": { "mode": "fixed", "fixedColor": "red" } }
+                ]
+              }
+            ]
+          },
+          "options": {
+            "legend": { "displayMode": "list", "placement": "bottom" },
+            "tooltip": { "mode": "multi" }
+          }
+        },
+        {
+          "id": 6,
+          "type": "timeseries",
+          "title": "Burn rate — all windows",
+          "gridPos": { "h": 9, "w": 12, "x": 12, "y": 6 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "slo:sli_error:ratio_rate5m{sloth_service=\"$service\"} / (1 - slo:objective:ratio{sloth_service=\"$service\"})",
+              "legendFormat": "5m"
+            },
+            {
+              "refId": "B",
+              "expr": "slo:sli_error:ratio_rate30m{sloth_service=\"$service\"} / (1 - slo:objective:ratio{sloth_service=\"$service\"})",
+              "legendFormat": "30m"
+            },
+            {
+              "refId": "C",
+              "expr": "slo:sli_error:ratio_rate1h{sloth_service=\"$service\"} / (1 - slo:objective:ratio{sloth_service=\"$service\"})",
+              "legendFormat": "1h"
+            },
+            {
+              "refId": "D",
+              "expr": "slo:sli_error:ratio_rate6h{sloth_service=\"$service\"} / (1 - slo:objective:ratio{sloth_service=\"$service\"})",
+              "legendFormat": "6h"
+            },
+            {
+              "refId": "E",
+              "expr": "slo:sli_error:ratio_rate1d{sloth_service=\"$service\"} / (1 - slo:objective:ratio{sloth_service=\"$service\"})",
+              "legendFormat": "1d"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "none",
+              "decimals": 2,
+              "custom": {
+                "drawStyle": "line",
+                "lineWidth": 2,
+                "fillOpacity": 5,
+                "thresholdsStyle": { "mode": "line" }
+              },
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "color": "green", "value": null },
+                  { "color": "yellow", "value": 1 },
+                  { "color": "orange", "value": 3 },
+                  { "color": "red", "value": 6 },
+                  { "color": "dark-red", "value": 14.4 }
+                ]
+              }
+            }
+          },
+          "options": {
+            "legend": { "displayMode": "list", "placement": "bottom" },
+            "tooltip": { "mode": "multi" }
+          }
+        }
+      ]
+    }

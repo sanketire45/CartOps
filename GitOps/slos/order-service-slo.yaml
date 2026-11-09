@@ -1,0 +1,60 @@
+# =============================================================================
+#  order-service-slo.yaml — Availability SLO for order-service
+# =============================================================================
+#  📖  Same shape as product-category-slo.yaml — only the `service` name and
+#       the service_name label filter in the queries change. See that file's
+#       header for the full explanation of each field.
+#
+#  🎯  Why a LOWER objective (99.0 vs 99.5):
+#       order-service writes to the database and publishes SQS messages —
+#       more moving parts than the mostly-read-only product-category. We
+#       intentionally give it a looser SLO so our error budget reflects
+#       reality instead of being permanently blown. This is a judgment
+#       call teams tune after seeing a few weeks of real traffic.
+# =============================================================================
+apiVersion: sloth.slok.dev/v1
+kind: PrometheusServiceLevel
+metadata:
+  name: order-service-slo
+  namespace: observability
+  labels:
+    owner: platform
+spec:
+  service: order-service
+
+  labels:
+    team: platform
+    tier: critical
+
+  slos:
+    - name: requests-availability
+      objective: 99.0                        # looser than product-category — see header
+      description: "99.0% of HTTP requests to order-service return non-5xx over 30 days."
+
+      sli:
+        events:
+          error_query: |
+            sum(rate(http_server_request_duration_seconds_count{
+                service_name="order-service",
+                http_response_status_code=~"5.."
+            }[{{.window}}]))
+          total_query: |
+            sum(rate(http_server_request_duration_seconds_count{
+                service_name="order-service"
+            }[{{.window}}]))
+
+      alerting:
+        name: OrderServiceAvailability
+        labels:
+          category: availability
+        annotations:
+          summary: "order-service availability SLO is burning"
+          runbook_url: "https://wiki.example.com/runbooks/slo-availability"
+        page_alert:
+          labels:
+            severity: critical
+            route: pager
+        ticket_alert:
+          labels:
+            severity: warning
+            route: ticket

@@ -1,0 +1,92 @@
+# =============================================================================
+#  product-category-slo.yaml — Availability SLO for product-category
+# =============================================================================
+#  📖  WHAT THIS DOES:
+#        Declares ONE SLO ("99.5% of requests are non-5xx over 30 days")
+#        for the product-category service. The Sloth controller watches
+#        this CR, templates the queries across 7 windows (5m, 30m, 1h, 6h,
+#        1d, 3d, 30d), and generates a PrometheusRule with:
+#          • 7 recording rules — error ratio per window
+#          • 2 metadata rules   — objective + time period as constants
+#          • 4 alert rules      — the multi-burn-rate ladder
+#
+#  🧮  THE SLI MATH (what makes this an "availability" SLO):
+#        error_query = rate of 5xx HTTP responses
+#        total_query = rate of ALL HTTP responses
+#        SLI (over window W) = error_query / total_query
+#        SLO is met when SLI < (1 - objective/100) = 0.005
+#
+#  🏷️  `{{.window}}` IS SLOTH'S TEMPLATE PLACEHOLDER:
+#        Sloth substitutes 5m, 30m, 1h, 6h, 1d, 3d, 30d when it generates
+#        each recording rule. You write the query ONCE; Sloth emits 7.
+#
+#  🔗  METRIC: `http_server_request_duration_seconds_count`
+#        Shipped by the Spring Boot services via the OTel Java agent
+#        (see otel-instrumentation.tf) → gateway → Prometheus remote-write.
+#        Labels:
+#          service_name                   — "product-category"
+#          http_response_status_code      — 200, 404, 500, etc.
+#          http_request_method            — GET, POST, …
+#          http_route                     — "/api/categories/{id}"
+#
+#  🚨  ALERT ROUTING:
+#        - page_alert  → labels.severity=critical → PagerDuty-style route
+#          in Alertmanager (we wire Slack #alerts-critical in M7).
+#        - ticket_alert → labels.severity=warning → #alerts-warning.
+# =============================================================================
+apiVersion: sloth.slok.dev/v1
+kind: PrometheusServiceLevel
+metadata:
+  name: product-category-slo
+  namespace: observability
+  labels:
+    owner: platform
+spec:
+  # ── IDENTITY ────────────────────────────────────────────────────────────
+  # `service` becomes the `sloth_service` label on every generated metric
+  # and alert — the knob dashboards filter on.
+  service: product-category
+
+  # Extra labels copied onto every generated recording rule AND alert.
+  # Use them for routing, ownership queries, and multi-cluster slicing.
+  labels:
+    team: platform
+    tier: critical
+
+  # ── SLOS (a list — add latency later as a second entry) ────────────────
+  slos:
+    - name: requests-availability
+      objective: 99.5                        # SLO target in % → budget = 0.5%
+      description: "99.5% of HTTP requests to product-category return non-5xx over 30 days."
+
+      # ── SLI: raw-event style (counter-based) ────────────────────────
+      # Sloth asks for BAD numerator + TOTAL denominator; it does the
+      # division per window.
+      sli:
+        events:
+          error_query: |
+            sum(rate(http_server_request_duration_seconds_count{
+                service_name="product-category",
+                http_response_status_code=~"5.."
+            }[{{.window}}]))
+          total_query: |
+            sum(rate(http_server_request_duration_seconds_count{
+                service_name="product-category"
+            }[{{.window}}]))
+
+      # ── ALERTING: Sloth fans these two configs into 4 alerts ────────
+      alerting:
+        name: ProductCategoryAvailability
+        labels:
+          category: availability
+        annotations:
+          summary: "product-category availability SLO is burning"
+          runbook_url: "https://wiki.example.com/runbooks/slo-availability"
+        page_alert:
+          labels:
+            severity: critical
+            route: pager
+        ticket_alert:
+          labels:
+            severity: warning
+            route: ticket

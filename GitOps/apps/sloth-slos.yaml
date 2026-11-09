@@ -1,0 +1,58 @@
+# =============================================================================
+#  sloth-slos.yaml — Task M6 ArgoCD Application (SLO specs as code)
+# =============================================================================
+#  📖  WHAT THIS DOES:
+#        Root-app watches GitOps/apps/ → this file creates an ArgoCD
+#        Application called `sloth-slos` that syncs everything in
+#        GitOps/slos/ — one PrometheusServiceLevel CR per service.
+#        Push a new SLO YAML → Sloth generates the PrometheusRule →
+#        Prometheus picks it up → alerts + recording rules live.
+#
+#  🏷️  WHY `observability` NAMESPACE:
+#        The PrometheusRule Sloth generates lands in the SAME namespace as
+#        the PromServiceLevel CR. We want rules next to Prometheus so they
+#        get picked up by the same `ruleSelectorNilUsesHelmValues: false`
+#        rule-selector trick used for ServiceMonitor selection.
+#
+#  🔄  SYNC WAVE:
+#        sync-wave "4" → runs AFTER grafana-dashboards (wave 3).
+#        By wave 4, ArgoCD knows our services are already running and
+#        emitting http_server_request_duration_seconds_count, which the
+#        SLI queries below reference.
+#
+#  ➕  ADD A NEW SERVICE'S SLO:
+#        Copy an existing *-slo.yaml, change `name`, `service`, and the
+#        service_name label in the two PromQL queries. ArgoCD picks it up
+#        automatically; Sloth regenerates rules on the next reconcile.
+# =============================================================================
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: sloth-slos
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "4"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+
+  source:
+    repoURL: https://github.com/sanketire45/CartOps.git
+    targetRevision: main
+    path: GitOps/slos
+    directory:
+      include: "*.yaml"
+      recurse: false
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: observability
+
+  syncPolicy:
+    automated:
+      prune: true     # remove SLO CRs whose YAML is deleted from git
+      selfHeal: true  # re-apply if someone kubectl-edits a CR live
+    syncOptions:
+      - CreateNamespace=false   # observability ns owned by Terraform
+      - ServerSideApply=true
