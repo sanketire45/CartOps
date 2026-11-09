@@ -1,0 +1,85 @@
+# =============================================================================
+#  product-category-latency-slo.yaml — Latency SLO for product-category (M8)
+# =============================================================================
+#  📖  WHAT THIS DOES:
+#        Second SLO alongside the availability one in
+#        product-category-slo.yaml. Catches "slow but working" — Spring Boot
+#        returns 200s but the DB is choking, connection pool is saturated,
+#        or a dependency is dragging. An availability SLO wouldn't fire; a
+#        latency SLO will.
+#
+#  🧮  THE SLI MATH — "% of successful requests slower than 300ms":
+#        error_query = successful (non-5xx) requests that took > 300ms
+#        total_query = ALL successful (non-5xx) requests
+#
+#     The histogram metric http_server_request_duration_seconds_bucket has
+#     a `le` label (less-than-or-equal) per bucket. Count of requests
+#     above 300ms = total - count(le=0.3).
+#
+#     We filter OUT 5xx responses in both queries: errors and slow
+#     responses are tracked by different SLOs, no double-counting.
+#
+#  🎯  OBJECTIVE: 95% < 300ms over 30 days → budget = 5%
+#        Looser than availability's 99.5% because latency moves faster:
+#        normal p99 fluctuation over a month easily spends 2-3% of budget.
+#        Tune down to 99% once we've seen a few weeks of real traffic and
+#        know the baseline p99.
+# =============================================================================
+apiVersion: sloth.slok.dev/v1
+kind: PrometheusServiceLevel
+metadata:
+  name: product-category-latency-slo
+  namespace: observability
+  labels:
+    owner: platform
+spec:
+  service: product-category
+
+  labels:
+    team: platform
+    tier: critical
+
+  slos:
+    - name: requests-latency
+      objective: 95
+      description: "95% of successful HTTP requests to product-category return within 300ms over 30 days."
+
+      sli:
+        events:
+          # Numerator: successful requests SLOWER than 300ms
+          # (total_count_excluding_5xx) minus (bucket count at le=0.3 excluding 5xx)
+          errorQuery: |
+            (
+              sum(rate(http_server_request_duration_seconds_count{
+                  service_name="product-category",
+                  http_response_status_code!~"5.."
+              }[{{.window}}]))
+              -
+              sum(rate(http_server_request_duration_seconds_bucket{
+                  service_name="product-category",
+                  http_response_status_code!~"5..",
+                  le="0.3"
+              }[{{.window}}]))
+            )
+          # Denominator: ALL successful requests
+          totalQuery: |
+            sum(rate(http_server_request_duration_seconds_count{
+                service_name="product-category",
+                http_response_status_code!~"5.."
+            }[{{.window}}]))
+
+      alerting:
+        name: ProductCategoryLatency
+        labels:
+          category: latency
+        annotations:
+          summary: "product-category latency SLO is burning (p95 slower than 300ms)"
+          runbook_url: "https://wiki.example.com/runbooks/slo-latency"
+        pageAlert:
+          labels:
+            severity: critical
+            route: pager
+        ticketAlert:
+          labels:
+            severity: warning
+            route: ticket

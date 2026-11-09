@@ -1,0 +1,67 @@
+# =============================================================================
+#  order-service-latency-slo.yaml — Latency SLO for order-service (M8)
+# =============================================================================
+#  📖  Same shape as product-category-latency-slo.yaml — see that file for
+#       the full explanation of the SLI math.
+#
+#  🎯  Why a LOWER threshold (90% < 500ms vs product-category's 95% < 300ms):
+#       order-service writes to MySQL AND publishes to SQS on every POST.
+#       Two network hops, two fsync paths. Realistic p95 is 400-600ms
+#       even on a healthy system. 90%/500ms gives it enough room without
+#       the SLO burning constantly during normal operation.
+# =============================================================================
+apiVersion: sloth.slok.dev/v1
+kind: PrometheusServiceLevel
+metadata:
+  name: order-service-latency-slo
+  namespace: observability
+  labels:
+    owner: platform
+spec:
+  service: order-service
+
+  labels:
+    team: platform
+    tier: critical
+
+  slos:
+    - name: requests-latency
+      objective: 90
+      description: "90% of successful HTTP requests to order-service return within 500ms over 30 days."
+
+      sli:
+        events:
+          errorQuery: |
+            (
+              sum(rate(http_server_request_duration_seconds_count{
+                  service_name="order-service",
+                  http_response_status_code!~"5.."
+              }[{{.window}}]))
+              -
+              sum(rate(http_server_request_duration_seconds_bucket{
+                  service_name="order-service",
+                  http_response_status_code!~"5..",
+                  le="0.5"
+              }[{{.window}}]))
+            )
+          totalQuery: |
+            sum(rate(http_server_request_duration_seconds_count{
+                service_name="order-service",
+                http_response_status_code!~"5.."
+            }[{{.window}}]))
+
+      alerting:
+        name: OrderServiceLatency
+        labels:
+          category: latency
+        annotations:
+          summary: "order-service latency SLO is burning (p90 slower than 500ms)"
+          runbook_url: "https://wiki.example.com/runbooks/slo-latency"
+        pageAlert:
+          labels:
+            severity: critical
+            route: pager
+        ticketAlert:
+          labels:
+            severity: warning
+            route: ticket

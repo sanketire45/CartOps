@@ -173,6 +173,19 @@ alertmanager:
       # Still firing after this → re-ping Slack
       repeat_interval: 4h
       routes:
+        # ── M8 alert-hygiene: silence kube-prom-stack default cluster-health
+        # alerts (Kube*, CPU throttling, Prometheus/Alertmanager internals).
+        # On a small dev cluster these fire constantly and drown the SLO
+        # signal. They STILL fire in Prometheus and show in Alertmanager's
+        # UI, so you can go look if you need them — they just don't ping
+        # Slack. Delete this route to re-enable cluster-health paging.
+        #
+        # Deliberately NOT regex-wildcarding on the alertname — we want an
+        # explicit allow/deny list so adding a new alert source is obvious.
+        - matchers:
+            - alertname =~ "Kube.*|CPUThrottlingHigh|InfoInhibitor|TargetDown|NodeNetworkInterfaceFlapping|PrometheusNotConnectedToAlertmanagers|PrometheusDuplicateTimestamps|PrometheusOutOfOrderTimestamps|PrometheusNotIngestingSamples|PrometheusErrorSendingAlertsToSomeAlertmanagers|AlertmanagerFailedReload|AlertmanagerClusterFailedToSendAlerts|AlertmanagerConfigInconsistent|NodeDiskRunningFull|NodeFilesystemAlmostOutOfSpace|etcd.*|kubelet.*"
+          receiver: 'null'
+
         # Watchdog ALWAYS fires (dead-man's switch). Silence from Slack —
         # we check it in Alertmanager's UI directly.
         - matchers:
