@@ -149,7 +149,7 @@ data:
           "targets": [
             {
               "refId": "A",
-              "expr": "100 * (1 - (slo:sli_error:ratio_rate30d{sloth_service=\"$service\"} / (1 - slo:objective:ratio{sloth_service=\"$service\"})))"
+              "expr": "100 * (1 - (slo:sli_error:ratio_rate30d{sloth_service=\"$service\"} / ignoring(sloth_window) group_left() (1 - slo:objective:ratio{sloth_service=\"$service\"})))"
             }
           ],
           "fieldConfig": {
@@ -260,27 +260,27 @@ data:
           "targets": [
             {
               "refId": "A",
-              "expr": "slo:sli_error:ratio_rate5m{sloth_service=\"$service\"} / (1 - slo:objective:ratio{sloth_service=\"$service\"})",
+              "expr": "slo:sli_error:ratio_rate5m{sloth_service=\"$service\"} / ignoring(sloth_window) group_left() (1 - slo:objective:ratio{sloth_service=\"$service\"})",
               "legendFormat": "5m"
             },
             {
               "refId": "B",
-              "expr": "slo:sli_error:ratio_rate30m{sloth_service=\"$service\"} / (1 - slo:objective:ratio{sloth_service=\"$service\"})",
+              "expr": "slo:sli_error:ratio_rate30m{sloth_service=\"$service\"} / ignoring(sloth_window) group_left() (1 - slo:objective:ratio{sloth_service=\"$service\"})",
               "legendFormat": "30m"
             },
             {
               "refId": "C",
-              "expr": "slo:sli_error:ratio_rate1h{sloth_service=\"$service\"} / (1 - slo:objective:ratio{sloth_service=\"$service\"})",
+              "expr": "slo:sli_error:ratio_rate1h{sloth_service=\"$service\"} / ignoring(sloth_window) group_left() (1 - slo:objective:ratio{sloth_service=\"$service\"})",
               "legendFormat": "1h"
             },
             {
               "refId": "D",
-              "expr": "slo:sli_error:ratio_rate6h{sloth_service=\"$service\"} / (1 - slo:objective:ratio{sloth_service=\"$service\"})",
+              "expr": "slo:sli_error:ratio_rate6h{sloth_service=\"$service\"} / ignoring(sloth_window) group_left() (1 - slo:objective:ratio{sloth_service=\"$service\"})",
               "legendFormat": "6h"
             },
             {
               "refId": "E",
-              "expr": "slo:sli_error:ratio_rate1d{sloth_service=\"$service\"} / (1 - slo:objective:ratio{sloth_service=\"$service\"})",
+              "expr": "slo:sli_error:ratio_rate1d{sloth_service=\"$service\"} / ignoring(sloth_window) group_left() (1 - slo:objective:ratio{sloth_service=\"$service\"})",
               "legendFormat": "1d"
             }
           ],
