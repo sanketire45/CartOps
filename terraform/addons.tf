@@ -64,11 +64,15 @@ resource "aws_eks_addon" "vpc_cni" {
   addon_name    = "vpc-cni"
   addon_version = data.aws_eks_addon_version.vpc_cni.version
 
-  # Phase 3 #12: without this flag, NetworkPolicy objects are silently IGNORED
-  # by the VPC CNI — every kubectl apply succeeds but traffic rules do nothing.
-  # "true" tells the CNI agent to read NetworkPolicy objects and enforce them.
+  # NetworkPolicy support DISABLED — the aws-eks-nodeagent (Network Policy
+  # Agent) container crashloops silently on fresh EKS 1.34 + AL2023 nodes,
+  # which starves CoreDNS of readiness, which stalls every addon install.
+  # We don't use K8s NetworkPolicy resources in this project (grep -r
+  # "kind: NetworkPolicy" GitOps/ → 0 hits), so losing enforcement costs
+  # nothing. Flip back to "true" when adding pod-to-pod firewalls and
+  # verify the agent starts cleanly on your current node AMI.
   configuration_values = jsonencode({
-    enableNetworkPolicy = "true"
+    enableNetworkPolicy = "false"
     # Prefix delegation: assigns a /28 block (16 IPs) per ENI slot instead of 1 IP.
     # t3.medium: 3 ENIs × 6 slots × 16 IPs = 288 IPs available (vs 17 without).
     # REQUIRES the launch template --max-pods=110 override (eks.tf) — without it
