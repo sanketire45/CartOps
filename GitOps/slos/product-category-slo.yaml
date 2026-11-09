@@ -81,7 +81,7 @@ spec:
           category: availability
         annotations:
           summary: "product-category availability SLO is burning"
-          runbook_url: "https://wiki.example.com/runbooks/slo-availability"
+          runbook_url: "https://github.com/sanketire45/CartOps/blob/main/docs/runbooks/slo-availability.md"
         pageAlert:
           labels:
             severity: critical

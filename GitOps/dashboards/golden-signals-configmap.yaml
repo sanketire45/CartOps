@@ -383,6 +383,130 @@ data:
             "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
             "tooltip": { "mode": "multi" }
           }
+        },
+        {
+          "id": 10,
+          "type": "stat",
+          "title": "DB Pool Used %",
+          "gridPos": { "x": 0, "y": 26, "w": 8, "h": 5 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [
+            {
+              "expr": "100 * sum(db_client_connections_usage{service_name=\"$service\", state=\"used\"}) / sum(db_client_connections_max{service_name=\"$service\"})",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percent",
+              "decimals": 1,
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "color": "green", "value": null },
+                  { "color": "yellow", "value": 70 },
+                  { "color": "red", "value": 90 }
+                ]
+              }
+            }
+          },
+          "options": {
+            "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+            "colorMode": "background",
+            "graphMode": "area",
+            "textMode": "value_and_name"
+          }
+        },
+        {
+          "id": 11,
+          "type": "timeseries",
+          "title": "DB Pool connections (active / idle / pending)",
+          "gridPos": { "x": 8, "y": 26, "w": 10, "h": 5 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [
+            {
+              "expr": "sum(db_client_connections_usage{service_name=\"$service\", state=\"used\"})",
+              "refId": "A",
+              "legendFormat": "active"
+            },
+            {
+              "expr": "sum(db_client_connections_usage{service_name=\"$service\", state=\"idle\"})",
+              "refId": "B",
+              "legendFormat": "idle"
+            },
+            {
+              "expr": "sum(db_client_connections_pending_requests{service_name=\"$service\"})",
+              "refId": "C",
+              "legendFormat": "pending"
+            },
+            {
+              "expr": "sum(db_client_connections_max{service_name=\"$service\"})",
+              "refId": "D",
+              "legendFormat": "max"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "custom": {
+                "drawStyle": "line",
+                "lineWidth": 2,
+                "fillOpacity": 5
+              }
+            },
+            "overrides": [
+              {
+                "matcher": { "id": "byName", "options": "max" },
+                "properties": [
+                  { "id": "custom.lineStyle", "value": { "fill": "dash", "dash": [10, 10] } },
+                  { "id": "color", "value": { "mode": "fixed", "fixedColor": "red" } }
+                ]
+              },
+              {
+                "matcher": { "id": "byName", "options": "pending" },
+                "properties": [
+                  { "id": "color", "value": { "mode": "fixed", "fixedColor": "orange" } }
+                ]
+              }
+            ]
+          },
+          "options": {
+            "legend": { "displayMode": "list", "placement": "bottom" },
+            "tooltip": { "mode": "multi" }
+          }
+        },
+        {
+          "id": 12,
+          "type": "stat",
+          "title": "DB Pool pending waits",
+          "gridPos": { "x": 18, "y": 26, "w": 6, "h": 5 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [
+            {
+              "expr": "sum(db_client_connections_pending_requests{service_name=\"$service\"})",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "decimals": 0,
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "color": "green", "value": null },
+                  { "color": "orange", "value": 1 },
+                  { "color": "red", "value": 5 }
+                ]
+              }
+            }
+          },
+          "options": {
+            "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+            "colorMode": "background",
+            "graphMode": "area",
+            "textMode": "value_and_name"
+          }
         }
       ]
     }

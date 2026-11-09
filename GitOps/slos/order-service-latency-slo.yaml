@@ -56,7 +56,7 @@ spec:
           category: latency
         annotations:
           summary: "order-service latency SLO is burning (p90 slower than 500ms)"
-          runbook_url: "https://wiki.example.com/runbooks/slo-latency"
+          runbook_url: "https://github.com/sanketire45/CartOps/blob/main/docs/runbooks/slo-latency.md"
         pageAlert:
           labels:
             severity: critical

@@ -1,0 +1,61 @@
+# =============================================================================
+#  saturation-alerts.yaml — M9 saturation alerts for all ecom services
+# =============================================================================
+#  📖  WHY A RAW PrometheusRule (not a PromServiceLevel):
+#        SLOs answer "are users getting hurt?" Saturation alerts answer "is
+#        a resource about to break?" They're the EARLY WARNING — fire BEFORE
+#        the SLO budget starts burning, so on-call can react pre-incident.
+#
+#  🚨  THE ONE RULE WE START WITH:
+#        DbPoolExhausted — ANY thread anywhere waiting for a DB connection
+#        for 5 continuous minutes. In Spring Boot + HikariCP this is the
+#        canonical "something's about to go very wrong" signal:
+#          - normal state: pending_requests = 0 (connections always available)
+#          - degraded:     pending_requests > 0 for a minute (brief burst)
+#          - alarm:        pending_requests > 0 for 5 min (sustained; users
+#                          waiting; latency SLO about to burn)
+#
+#  📏  METRIC: db_client_connections_pending_requests
+#        Emitted by OTel Java auto-instrumentation for HikariCP (zero code
+#        changes). Labeled with `service_name` so a single rule covers
+#        every service.
+#
+#  🔔  SEVERITY: warning (ticket, not page). Rationale: a brief saturation
+#        isn't user-impacting yet — give the on-call a heads-up via ticket
+#        queue so they investigate pool-size, downstream slowness, long
+#        transactions, etc. If latency SLO burns next, THAT's the page.
+# =============================================================================
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: ecom-saturation-alerts
+  namespace: observability
+  labels:
+    # Prometheus Operator picks up any PrometheusRule cluster-wide thanks to
+    # the ruleSelectorNilUsesHelmValues: false knob in kube-prom-stack.
+    prometheus: kube-prom-stack-kube-prome-prometheus
+    role: alert-rules
+spec:
+  groups:
+    - name: ecom-saturation
+      interval: 30s
+      rules:
+        - alert: DbPoolExhausted
+          expr: |
+            sum by (service_name) (
+              db_client_connections_pending_requests
+            ) > 0
+          for: 5m
+          labels:
+            severity: warning
+            category: saturation
+            route: ticket
+            team: platform
+            tier: critical
+          annotations:
+            summary: "{{ $labels.service_name }} has threads waiting for a DB connection for 5+ minutes"
+            description: |
+              {{ $value }} thread(s) in {{ $labels.service_name }} are waiting for a HikariCP connection,
+              sustained for 5 minutes. Investigate: slow queries, oversized transactions,
+              downstream DB CPU, pool size too small.
+            runbook_url: "https://github.com/sanketire45/CartOps/blob/main/docs/runbooks/db-pool-exhausted.md"
