@@ -19,10 +19,20 @@
 #        is documented below — swap nodeSets for a 3-pod master NodeSet +
 #        a scalable data NodeSet, add a dedicated node pool with taints.
 #
-#  🧮  SIZING (dev-mode defaults for a small cluster):
-#        JVM heap = 1 GB (ES rule: ~50% of container memory)
-#        Container limit = 2 GB (heap + Lucene off-heap file cache)
-#        Storage = 10 GB on gp3 (small; M12 ILM will roll old indices off)
+#  🧮  SIZING (DEV-MODE on a 3× t3.medium cluster — deliberately below prod):
+#        JVM heap = 512 MB            (prod minimum ~1 GB)
+#        Container limit = 768 Mi     (prod comfortable 2 Gi)
+#        Storage = 10 GB on gp3       (small; M12 ILM will roll old indices off)
+#
+#        WHY the small sizing: we need ES + Prometheus + Grafana + OTel + apps
+#        all on a 3-node t3.medium cluster. Total allocatable is ~9.6 Gi; the
+#        full stack requests ~9 Gi at this sizing. Production path: switch to
+#        t3.large (8 GB each) or m5.large and bump memory back to 2Gi/1Gi.
+#
+#        OBSERVATION TASK F38 (TASKS.md): watch for these stress symptoms —
+#          • GC pauses under write bursts (pod memory pins at limit)
+#          • Query slowdown once logs > off-heap cache (Lucene hits disk)
+#          • No burst headroom (container limit == request)
 #
 #  🔐  SECURITY — ECK handles this automatically:
 #        - TLS on the transport (inter-node) and HTTP (client) layers
@@ -70,13 +80,14 @@ spec:
             - name: elasticsearch
               env:
                 - name: ES_JAVA_OPTS
-                  value: "-Xms1g -Xmx1g"
+                  # 512MB heap — dev-mode floor. Prod would be 1g+.
+                  value: "-Xms512m -Xmx512m"
               resources:
                 requests:
-                  memory: 2Gi
-                  cpu: 500m
+                  memory: 768Mi    # dev-mode; prod comfortable = 2Gi
+                  cpu: 300m         # dev; prod = 500m+
                 limits:
-                  memory: 2Gi
+                  memory: 768Mi
                   # NO CPU LIMIT — ES gets throttled unpredictably with
                   # hard CPU limits; standard ES production guidance is
                   # request-only. Memory limit == request = guaranteed QoS.
