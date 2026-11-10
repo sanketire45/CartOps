@@ -1,0 +1,121 @@
+# =============================================================================
+#  elasticsearch.yaml — M10 Elasticsearch cluster CR (dev-mode, 1 node)
+# =============================================================================
+#  📖  WHAT THIS IS:
+#        A single Elasticsearch CR that the ECK operator reconciles into
+#        a StatefulSet. On apply the operator:
+#          - Creates the StatefulSet with correct JVM/Lucene tuning
+#          - Generates a self-signed CA + per-node TLS cert
+#          - Seeds the `elastic` superuser into a Secret
+#            (observability/ecom-logs-es-elastic-user)
+#          - Creates headless + ClusterIP Services
+#
+#  🏷️  WHY 1 NODE (and not the production 3+ master-eligible):
+#        Our demo cluster is small (3× t3.medium). A production ES wants
+#        3+ master-eligible nodes for quorum (split-brain protection).
+#        We'd need 3 pods × 2GB = 6GB just for ES — half the cluster.
+#        Dev-mode (single-node, all roles on one pod) gives us a working
+#        ELK stack for M11-M13 at ~2GB. The config to go production
+#        is documented below — swap nodeSets for a 3-pod master NodeSet +
+#        a scalable data NodeSet, add a dedicated node pool with taints.
+#
+#  🧮  SIZING (dev-mode defaults for a small cluster):
+#        JVM heap = 1 GB (ES rule: ~50% of container memory)
+#        Container limit = 2 GB (heap + Lucene off-heap file cache)
+#        Storage = 10 GB on gp3 (small; M12 ILM will roll old indices off)
+#
+#  🔐  SECURITY — ECK handles this automatically:
+#        - TLS on the transport (inter-node) and HTTP (client) layers
+#        - `elastic` superuser password in a K8s Secret
+#        - CA cert in observability/ecom-logs-es-http-certs-public
+#        Retrieve the password: see the comment at the bottom.
+#
+#  📈  PRODUCTION PATH (when we move to a dedicated ES node pool):
+#        nodeSets:
+#          - name: master     count: 3   roles: [master]            memory: 2Gi
+#          - name: hot        count: 2   roles: [data_hot, ingest]  memory: 8Gi  SSD
+#          - name: warm       count: 2   roles: [data_warm]         memory: 4Gi  HDD
+#          - name: coordinate count: 2   roles: []                  memory: 4Gi
+#        + podTemplate.spec.tolerations to run on a tainted node pool.
+# =============================================================================
+apiVersion: elasticsearch.k8s.elastic.co/v1
+kind: Elasticsearch
+metadata:
+  name: ecom-logs
+  namespace: observability
+spec:
+  # Pin version — matches Kibana version exactly (ECK enforces this).
+  # 8.15 is current GA as of M10. Bump both ES + Kibana together in one PR.
+  version: 8.15.3
+
+  # One NodeSet (production would have multiple — master/hot/warm/cold).
+  nodeSets:
+    - name: default
+      count: 1
+      config:
+        # Dev-mode: this single node runs ALL roles (master, data, ingest).
+        # In production node.roles is split per NodeSet.
+        node.roles: ["master", "data", "ingest", "ml", "remote_cluster_client", "transform"]
+        # Dev-mode single-node bootstrap: needed so ES doesn't wait for
+        # 2+ master-eligible nodes to form a quorum.
+        node.store.allow_mmap: false
+        # xpack.security is ENABLED by default in ECK-managed clusters.
+        # Disabling would skip the elastic-user secret seeding — don't.
+
+      podTemplate:
+        spec:
+          # Give the JVM ~50% of container memory for heap, leave the rest
+          # for the OS file cache (Lucene relies heavily on it).
+          containers:
+            - name: elasticsearch
+              env:
+                - name: ES_JAVA_OPTS
+                  value: "-Xms1g -Xmx1g"
+              resources:
+                requests:
+                  memory: 2Gi
+                  cpu: 500m
+                limits:
+                  memory: 2Gi
+                  # NO CPU LIMIT — ES gets throttled unpredictably with
+                  # hard CPU limits; standard ES production guidance is
+                  # request-only. Memory limit == request = guaranteed QoS.
+
+          # mmapfs requires vm.max_map_count >= 262144. We disable mmap
+          # above (allow_mmap: false) so we don't need to tune the kernel.
+          # Production path: enable mmap + run a privileged initContainer
+          # with `sysctl -w vm.max_map_count=262144`, OR set it in the
+          # node userData of the launch template.
+          initContainers:
+            - name: sysctl
+              # Minimal placeholder — only here to document the pattern.
+              # Replace with real sysctl-tuning if we flip allow_mmap=true.
+              command: ["/bin/sh", "-c", "echo 'mmap disabled — no sysctl needed'"]
+
+      volumeClaimTemplates:
+        - metadata:
+            name: elasticsearch-data   # name required by ECK
+          spec:
+            accessModes: ["ReadWriteOnce"]
+            storageClassName: gp3       # the one we created in addons.tf
+            resources:
+              requests:
+                storage: 10Gi
+
+  # Expose the HTTP service as ClusterIP (default). Access via port-forward:
+  #   kubectl port-forward -n observability svc/ecom-logs-es-http 9200:9200
+  # Kibana wires to it in-cluster (see kibana.yaml).
+  http:
+    tls:
+      selfSignedCertificate:
+        # Allow Kibana's DNS name in the cert (ECK handles the CN; this
+        # block is here to show the knob exists).
+        subjectAltNames:
+          - dns: ecom-logs-es-http.observability.svc.cluster.local
+
+# -----------------------------------------------------------------------------
+#  🔑  RETRIEVE THE ELASTIC SUPERUSER PASSWORD:
+#        kubectl get secret -n observability ecom-logs-es-elastic-user \
+#          -o jsonpath='{.data.elastic}' | base64 -d
+#        (Use this for initial Kibana login — username "elastic")
+# -----------------------------------------------------------------------------

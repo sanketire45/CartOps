@@ -1,0 +1,77 @@
+# =============================================================================
+#  kibana.yaml — M10 Kibana CR (UI + saved searches + Discover for logs)
+# =============================================================================
+#  📖  WHAT THIS IS:
+#        One Kibana CR that the ECK operator reconciles into a Deployment.
+#        The `elasticsearchRef` tells the operator to:
+#          - Wire the CA cert of the ES cluster into the Kibana pod
+#          - Inject the `kibana-system` service account's password
+#          - Set elasticsearch.hosts in kibana.yml automatically
+#        You never type an ES URL or a password into this YAML — ECK does it.
+#
+#  🔑  LOGIN:
+#        username: elastic
+#        password: kubectl get secret -n observability ecom-logs-es-elastic-user \
+#                    -o jsonpath='{.data.elastic}' | base64 -d
+#
+#  🌐  ACCESS:
+#        Initially via port-forward:
+#          kubectl port-forward -n observability svc/ecom-logs-kb-http 5601:5601
+#          → https://localhost:5601 (self-signed cert — accept the warning)
+#        Future: wire through our nginx Ingress + cert-manager (not M10 scope).
+#
+#  🧮  SIZING:
+#        Kibana is Node.js — much lighter than ES. 1 GB memory is plenty
+#        for dev. In production run 2+ replicas for HA (stateless).
+# =============================================================================
+apiVersion: kibana.k8s.elastic.co/v1
+kind: Kibana
+metadata:
+  name: ecom-logs
+  namespace: observability
+spec:
+  version: 8.15.3    # MUST match the Elasticsearch version (ECK enforces this)
+
+  count: 1           # dev: 1 replica. Prod: 2+ (Kibana is stateless).
+
+  elasticsearchRef:
+    name: ecom-logs  # matches the Elasticsearch CR's metadata.name
+
+  podTemplate:
+    spec:
+      containers:
+        - name: kibana
+          resources:
+            requests:
+              memory: 500Mi
+              cpu: 200m
+            limits:
+              memory: 1Gi
+              # no CPU limit — same reasoning as ES
+
+  http:
+    tls:
+      selfSignedCertificate:
+        # Allows browser access via localhost:5601 without cert errors on
+        # the "localhost" name (you'll still see "self-signed" warnings — fine).
+        subjectAltNames:
+          - dns: localhost
+          - dns: ecom-logs-kb-http.observability.svc.cluster.local
+
+# -----------------------------------------------------------------------------
+#  🧪  VERIFY AFTER SYNC:
+#        kubectl get kb -n observability
+#        # NAME      HEALTH   NODES   VERSION   AGE
+#        # ecom-logs green    1       8.15.3    5m
+#
+#        kubectl port-forward -n observability svc/ecom-logs-kb-http 5601:5601
+#        → https://localhost:5601 → log in as elastic / <password>
+#
+#  🧯  COMMON FIRST-RUN ISSUES:
+#        - Kibana pod CrashLoopBackOff → usually ES not yet green; wait or
+#          `kubectl get es -n observability`
+#        - "Kibana server is not ready yet" → ES password Secret not mounted;
+#          delete the pod to force re-wire
+#        - Pod Pending → PVC/StorageClass: Kibana doesn't need a PVC, so
+#          this means the node group is full (add nodes or scale down apps)
+# -----------------------------------------------------------------------------

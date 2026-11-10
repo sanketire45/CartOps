@@ -1,0 +1,56 @@
+# =============================================================================
+#  elastic-stack.yaml — M10 ArgoCD Application (Elasticsearch + Kibana CRs)
+# =============================================================================
+#  📖  WHAT THIS DOES:
+#        Root-app watches GitOps/apps/ → this file creates an ArgoCD
+#        Application called `elastic-stack` that syncs the Elasticsearch
+#        and Kibana CRs under GitOps/elastic/. The ECK operator (installed
+#        by Terraform in terraform/eck-operator.tf) reconciles those CRs
+#        into a StatefulSet (ES) + Deployment (Kibana) + PVCs + TLS Secrets.
+#
+#  🔄  SYNC WAVE:
+#        sync-wave "5" → after sloth-slos (wave 4). By wave 5 we're far
+#        enough through the boot sequence that the ECK operator pod is
+#        already Running (Terraform installed it) and the CRDs are live.
+#
+#  ⚠️  CRITICAL DEPENDENCY — the CRDs must exist before ArgoCD syncs:
+#        If the ECK operator's `Elasticsearch` + `Kibana` CRDs aren't
+#        installed yet, this Application syncs into `SyncFailed` with
+#        "no matches for kind". Terraform installs the operator (and its
+#        CRDs) in Phase 3 of boot.sh, BEFORE this Application is created.
+#
+#  ➕  ADD A SECOND ES CLUSTER (future M18 Jaeger backend reuse):
+#        Drop a new CR into GitOps/elastic/. ArgoCD picks it up; ECK
+#        reconciles it into a separate StatefulSet.
+# =============================================================================
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: elastic-stack
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "5"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+
+  source:
+    repoURL: https://github.com/sanketire45/CartOps.git
+    targetRevision: main
+    path: GitOps/elastic
+    directory:
+      include: "*.yaml"
+      recurse: false
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: observability
+
+  syncPolicy:
+    automated:
+      prune: true     # remove CRs whose YAML is deleted from git
+      selfHeal: true  # re-apply if someone kubectl-edits a CR live
+    syncOptions:
+      - CreateNamespace=false   # observability ns owned by Terraform
+      - ServerSideApply=true    # CRDs with schemas benefit from SSA

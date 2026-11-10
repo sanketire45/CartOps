@@ -46,8 +46,8 @@ variable "node_instance_type" {
 }
 
 variable "node_desired_size" {
-  description = "How many worker nodes to start with (eksctl --nodes)"
-  default     = 2
+  description = "How many worker nodes to start with. 3 is the minimum to boot the full stack (kube-prom-stack + OTel + ArgoCD + ECK) without cluster-autoscaler kicking in mid-boot; 2 starts cause Prometheus/Alertmanager/ECK to sit Pending until autoscaler reacts (~2 min)."
+  default     = 3
 }
 
 variable "node_min_size" {

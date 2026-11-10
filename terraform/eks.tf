@@ -148,9 +148,18 @@ resource "aws_eks_node_group" "this" {
   }
 
   scaling_config {
-    desired_size = var.node_desired_size # 2
+    desired_size = var.node_desired_size # 3 — right-sized for the full stack at boot (metrics + OTel + ArgoCD + ECK)
     min_size     = var.node_min_size     # 2
     max_size     = var.node_max_size     # 5 — raised for Cluster Autoscaler (#26a)
+  }
+
+  # CRITICAL: ignore desired_size after creation. Cluster-autoscaler (#26a)
+  # owns scaling decisions at runtime. Without this, every `terraform apply`
+  # would reset desired_size back to var.node_desired_size, fighting with
+  # autoscaler and causing pods to unexpectedly evict when scaling back down.
+  # Terraform sets the initial value at creation; autoscaler owns it after.
+  lifecycle {
+    ignore_changes = [scaling_config[0].desired_size]
   }
 
   # Cluster Autoscaler discovers ASGs by scanning for these two tags.
