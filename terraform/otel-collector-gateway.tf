@@ -71,10 +71,14 @@ resource "helm_release" "otel_gateway" {
     value = "deployment"
   }
 
-  # ── 2 replicas for HA — ReplicaSet survives one pod restart cleanly.
+  # ── 1 replica — dev-mode. Cost compromise: on our 3-node t3.medium
+  # cluster, a second gateway pod (512Mi) alone forces cluster-autoscaler
+  # to add a 4th node. If this pod restarts, agents buffer in memory for
+  # ~5-10s before retrying — acceptable for dev. Prod flips back to 2
+  # for ReplicaSet-survives-one-restart HA.
   set {
     name  = "replicaCount"
-    value = "2"
+    value = "1"
   }
 
   # ── Image: -contrib — needed because the gateway will eventually export
