@@ -19,20 +19,21 @@
 #        is documented below — swap nodeSets for a 3-pod master NodeSet +
 #        a scalable data NodeSet, add a dedicated node pool with taints.
 #
-#  🧮  SIZING (DEV-MODE on a 3× t3.medium cluster — deliberately below prod):
-#        JVM heap = 512 MB            (prod minimum ~1 GB)
-#        Container limit = 768 Mi     (prod comfortable 2 Gi)
-#        Storage = 10 GB on gp3       (small; M12 ILM will roll old indices off)
+#  🧮  SIZING:
+#        JVM heap = 1 GB (ES rule: ~50% of container memory)
+#        Container limit = 2 Gi (heap + Lucene off-heap file cache)
+#        Storage = 10 GB on gp3 (small; M12 ILM will roll old indices off)
 #
-#        WHY the small sizing: we need ES + Prometheus + Grafana + OTel + apps
-#        all on a 3-node t3.medium cluster. Total allocatable is ~9.6 Gi; the
-#        full stack requests ~9 Gi at this sizing. Production path: switch to
-#        t3.large (8 GB each) or m5.large and bump memory back to 2Gi/1Gi.
+#        WE TRIED 768Mi/512MB heap to fit on 3× t3.medium, but ES 8.15
+#        OOMKilled during bootstrap — the bundled x-pack modules (ILM,
+#        Watcher, SQL, EQL, ML, Inference, APM, etc.) need ~400-500MB
+#        of heap JUST to initialise before any index is served. 1GB heap
+#        is the realistic floor for ES 8.x. If budget demands tighter,
+#        either downgrade to ES 7.x (less bundled x-pack — can run at
+#        512MB) or switch to OpenSearch, which has a slimmer bootstrap.
 #
-#        OBSERVATION TASK F38 (TASKS.md): watch for these stress symptoms —
-#          • GC pauses under write bursts (pod memory pins at limit)
-#          • Query slowdown once logs > off-heap cache (Lucene hits disk)
-#          • No burst headroom (container limit == request)
+#        As a consequence, the cluster needs a 4th t3.medium node OR
+#        a move to t3.large (3 × 8GB). Documented as F38 observation task.
 #
 #  🔐  SECURITY — ECK handles this automatically:
 #        - TLS on the transport (inter-node) and HTTP (client) layers
@@ -80,14 +81,18 @@ spec:
             - name: elasticsearch
               env:
                 - name: ES_JAVA_OPTS
-                  # 512MB heap — dev-mode floor. Prod would be 1g+.
-                  value: "-Xms512m -Xmx512m"
+                  # 1GB heap. We TRIED 512MB but ES 8.15 OOMKilled during
+                  # bootstrap (x-pack modules load into heap on startup —
+                  # ILM, Watcher, SQL, EQL, ML, Inference, APM, etc. —
+                  # several hundred MB just to initialise before any index
+                  # is served). 1GB is the realistic floor for ES 8.x.
+                  value: "-Xms1g -Xmx1g"
               resources:
                 requests:
-                  memory: 768Mi    # dev-mode; prod comfortable = 2Gi
-                  cpu: 300m         # dev; prod = 500m+
+                  memory: 2Gi    # heap + off-heap + JVM overhead
+                  cpu: 500m
                 limits:
-                  memory: 768Mi
+                  memory: 2Gi
                   # NO CPU LIMIT — ES gets throttled unpredictably with
                   # hard CPU limits; standard ES production guidance is
                   # request-only. Memory limit == request = guaranteed QoS.
