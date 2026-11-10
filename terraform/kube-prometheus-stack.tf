@@ -25,7 +25,7 @@
 #             Prometheus → cAdvisor via kubelet (container metrics)
 #           These exporters have STANDARD metric names that every community
 #           dashboard references — we do NOT route them through OTel.
-#
+# 
 #        2. OTel PUSH (apps push via gateway):
 #             Spring Boot → OTel Java agent → local OTel agent → OTel gateway
 #               → prometheusremotewrite exporter → Prometheus
@@ -40,7 +40,7 @@
 #        watches ALL ServiceMonitors cluster-wide → services onboard by
 #        LABEL + ServiceMonitor, not by chart edits. The "50+ services" win.
 #
-#  💾  STORAGE — 1d retention, 5Gi gp2 for dev:
+#  💾  STORAGE — 1d retention, 2Gi gp2 for dev:
 #        Retention set to 1 day → tiny disk footprint, perfect for daily
 #        apply/destroy cycles. Production would be 15d–30d + Thanos sidecar
 #        → S3 for long-term + HA + global query (task M4).
@@ -78,10 +78,14 @@ resource "helm_release" "kube_prometheus_stack" {
   #   - EKS cluster + addons (coredns) ready
   #   - observability namespace exists
   #   - EBS CSI driver installed (for the Prometheus PVC)
+  #   - gp3 StorageClass exists (Prometheus CR references it; absence of the
+  #     StorageClass causes the Operator to reconcile-fail with "storage
+  #     class gp3 does not exist" and the StatefulSet is never created).
   depends_on = [
     aws_eks_addon.coredns,
     aws_eks_addon.ebs_csi,
     kubernetes_namespace.observability,
+    kubernetes_storage_class.gp3,
   ]
 }
 

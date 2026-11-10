@@ -112,7 +112,19 @@ resource "aws_eks_addon" "coredns" {
   resolve_conflicts_on_create = "OVERWRITE"
   resolve_conflicts_on_update = "OVERWRITE"
 
-  depends_on = [aws_eks_node_group.this] # CoreDNS runs 2 pods → needs nodes
+  # CRITICAL: CoreDNS needs kube-proxy to route Service traffic. Without
+  # kube-proxy, CoreDNS pods cannot reach the kubernetes Service IP
+  # (10.100.0.1) to authenticate → they stay NotReady forever and the AWS
+  # addon status sits in CREATING until the 20-min timeout.
+  #
+  # The otel-operator chart depends on CoreDNS (for its webhook DNS resolution),
+  # so when boot.sh Phase 2 targets the otel_operator, Terraform drags coredns
+  # into the plan — but WITHOUT this depends_on, kube-proxy is NOT pulled in
+  # alongside, and the whole phase stalls.
+  depends_on = [
+    aws_eks_node_group.this, # CoreDNS runs 2 pods → needs nodes
+    aws_eks_addon.kube_proxy, # CoreDNS needs Service routing (kube-proxy)
+  ]
 }
 
 
@@ -235,6 +247,40 @@ resource "kubernetes_annotations" "gp2_default" {
     "storageclass.kubernetes.io/is-default-class" = "true"
   }
   depends_on = [aws_eks_addon.ebs_csi] # EBS CSI must be active before we rely on gp2
+}
+
+
+# -----------------------------------------------------------------------------
+#  📌 GP3 STORAGE CLASS — Prometheus (and other write-heavy pods) want this.
+#
+#  WHY GP3 vs GP2:
+#    - gp3: 3000 IOPS baseline, 125 MB/s throughput, ~20% cheaper per GB,
+#      IOPS/throughput decoupled from size (can provision them independently).
+#    - gp2: IOPS scales with size (3 IOPS/GB, min 100, burst to 3000), older gen.
+#    For Prometheus TSDB (write-heavy, random I/O) gp3 is noticeably better.
+#    kube-prometheus-stack's default Prometheus spec references `gp3` for storage;
+#    without this StorageClass the Prometheus CR fails with
+#    "storage class \"gp3\" does not exist" and the StatefulSet is never created.
+#
+#  VOLUMEBINDINGMODE = WaitForFirstConsumer:
+#    PVC stays Pending until a pod claims it, so the EBS volume is created
+#    in the SAME AZ as the pod — avoids the "volume node affinity conflict"
+#    error that bites when a PVC's volume AZ doesn't match where the scheduler
+#    places the pod.
+# -----------------------------------------------------------------------------
+resource "kubernetes_storage_class" "gp3" {
+  metadata {
+    name = "gp3"
+  }
+  storage_provisioner    = "ebs.csi.aws.com"
+  reclaim_policy         = "Delete"
+  volume_binding_mode    = "WaitForFirstConsumer"
+  allow_volume_expansion = true
+  parameters = {
+    type   = "gp3"
+    fsType = "ext4"
+  }
+  depends_on = [aws_eks_addon.ebs_csi]
 }
 
 

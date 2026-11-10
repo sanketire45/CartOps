@@ -19,17 +19,17 @@ prometheus:
     # ── Retention: 1 day of metrics on disk ───────────────────────────────────
     retention: 1d
     # Hard disk cap too — belt-and-braces to prevent runaway disk growth
-    retentionSize: "4GB"
+    retentionSize: "2GB"
 
     # ── Persistent storage (EBS gp2 via EKS default StorageClass) ────────────
     storageSpec:
       volumeClaimTemplate:
         spec:
-          storageClassName: gp2
+          storageClassName: gp3
           accessModes: ["ReadWriteOnce"]
           resources:
             requests:
-              storage: 5Gi
+              storage: 2Gi
 
     # ── THE selector knobs — the "50+ services onboard by label" lever ───────
     # Default behavior: Prometheus only picks up ServiceMonitor / PodMonitor /
