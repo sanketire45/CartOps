@@ -87,16 +87,10 @@ variable "slack_webhook_url" {
 }
 
 # ---------------------------------------------------------------------------
-# ECR (todo #5) — one private repo per service
+# NOTE: ECR repositories used to live here as `variable "ecr_repos"` and were
+# managed by terraform/ecr.tf. They were moved OUT of Terraform in Nov 2026
+# so repos (and their images) survive `terraform destroy` — a fresh boot.sh
+# run can pull a baseline v0.0.0 image without a Jenkins build.
+# Lifecycle policy is applied by scripts/ecr-lifecycle.sh instead.
+# Repo names are now defined in that script: scripts/ecr-lifecycle.sh (REPOS array).
 # ---------------------------------------------------------------------------
-variable "ecr_repos" {
-  description = "ECR repository names for each service (account/region come from the provider)"
-  type        = map(string)
-  default = {
-    product              = "ecom-product-category"
-    order                = "ecom-order-service"
-    eureka               = "ecom-eureka-server"
-    frontend             = "ecom-frontend"
-    notification_worker  = "ecom-notification-worker"
-  }
-}

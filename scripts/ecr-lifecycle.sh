@@ -1,35 +1,44 @@
 #!/bin/bash
 # =============================================================================
-#  scripts/ecr-lifecycle.sh — one-shot: apply "keep 1 image" policy to all repos
+#  scripts/ecr-lifecycle.sh — manage ECR repos + lifecycle policy out-of-band
 # =============================================================================
-#  What it does:
-#    For every ECR repo in our service list, PUT a lifecycle policy that
-#    expires any image beyond the single most-recent one. Idempotent —
-#    re-running just re-sets the same policy.
+#  ECR repos (and their images) live OUTSIDE Terraform. This script is the
+#  authoritative owner.
 #
-#  When to run:
-#    Any time after 'terraform apply' has created the repos. Only matters
-#    once the repo accumulates >1 image (i.e. after Jenkins pushes a
-#    second time). First push is a no-op for the policy.
+#  WHY — the design intent:
+#    1. We want ECR to SURVIVE `terraform destroy` so the baseline v0.0.0
+#       image stays around. A fresh `boot.sh` can then pull v0.0.0 without
+#       needing to start Jenkins.
+#    2. Jenkins only runs when there is a code change. Each run pushes a
+#       new image tag. Intraday, several images can accumulate (useful
+#       for Argo rollback within the day).
+#    3. The lifecycle policy keeps the N most-recent images per repo —
+#       currently 3 — giving a small rollback window AND letting the
+#       baseline sit unmolested when nothing newer is pushed.
 #
-#  Why not in Terraform:
-#    Daily 'terraform destroy' would destroy the policy too. Keeping this
-#    as an out-of-band script means it can survive a future state split
-#    (persistent ECR in its own terraform dir) without a refactor.
+#  WHAT IT DOES:
+#    For each ECR repo:
+#      - If the repo doesn't exist, CREATE it (IMMUTABLE tags, scan-on-push).
+#      - PUT the lifecycle policy (keep 3 newest images).
+#    Idempotent — re-running just confirms the same state.
 #
-#  Cost note:
-#    Each image layer = ~300 MB compressed. Keeping 1 per repo across
-#    5 repos = ~1.2 GB in ECR = ~$0.12/month. Leaving old images = $0.10
-#    per GB-month per extra image. Trivial money either way — this is for
-#    tidiness, not savings.
+#  WHEN TO RUN:
+#    - First-time project setup (creates the repos)
+#    - After editing the policy below
+#    - Normally never — this is a one-shot per environment
+#
+#  COST NOTE:
+#    Each image layer ≈ 300 MB compressed. 3 images × 5 repos × 300 MB
+#    ≈ 4.5 GB in ECR ≈ $0.45/month. Peanuts. This is for tidiness and
+#    rollback headroom, not savings.
 # =============================================================================
 
 set -euo pipefail
 
 REGION="us-east-2"
 
-# The 5 repos Terraform's aws_ecr_repository.services[*] creates.
-# Keep in sync with terraform/ecr.tf's for_each key set.
+# Authoritative repo list for this project. Keep in sync with k8s/*/deployment
+# manifests' image references.
 REPOS=(
   "ecom-product-category"
   "ecom-order-service"
@@ -38,17 +47,24 @@ REPOS=(
   "ecom-frontend"
 )
 
-# Policy: keep only the most recent image, regardless of tag state.
+# Lifecycle policy — keep the 3 most recent images per repo.
+# WHY 3:
+#   - 1 = baseline / currently referenced by YAML
+#   - 2 extra slots = intraday rollback headroom
+#   - If no new pushes happen, count stays at 1 (never exceeds 3), so the
+#     baseline is never expired. "nothing happens, nothing changes."
+#   - ECR evaluates lifecycle rules on push AND periodically (within ~24h),
+#     so excess intraday images clean up automatically by the next day.
 POLICY=$(cat <<'JSON'
 {
   "rules": [
     {
       "rulePriority": 1,
-      "description": "Keep only the most recent image",
+      "description": "Keep only the 3 most recent images (baseline + 2 rollback slots)",
       "selection": {
         "tagStatus": "any",
         "countType": "imageCountMoreThan",
-        "countNumber": 1
+        "countNumber": 3
       },
       "action": { "type": "expire" }
     }
@@ -57,43 +73,51 @@ POLICY=$(cat <<'JSON'
 JSON
 )
 
-BOLD=$'\033[1m'; GREEN=$'\033[32m'; YELLOW=$'\033[33m'; RESET=$'\033[0m'
+BOLD=$'\033[1m'; GREEN=$'\033[32m'; YELLOW=$'\033[33m'; CYAN=$'\033[36m'; RESET=$'\033[0m'
 ok()   { echo "${GREEN}  OK: $*${RESET}"; }
+info() { echo "${CYAN}  info: $*${RESET}"; }
 warn() { echo "${YELLOW}  WARN: $*${RESET}"; }
 
-echo "${BOLD}Applying 'keep latest 1 image' lifecycle policy to ECR repos...${RESET}"
+echo "${BOLD}Ensuring ECR repos + lifecycle policy for ${#REPOS[@]} services...${RESET}"
 echo "Region: $REGION"
 echo ""
 
-MISSING=()
 for repo in "${REPOS[@]}"; do
   echo "→ $repo"
-  # Short-circuit if the repo isn't there yet (terraform apply not run).
-  if ! aws ecr describe-repositories \
+
+  # Step 1: ensure the repo exists. Create it with IMMUTABLE tags + scan-on-push
+  # if it doesn't (matches the old Terraform config).
+  if aws ecr describe-repositories \
         --repository-names "$repo" \
         --region "$REGION" \
         >/dev/null 2>&1; then
-    warn "repo '$repo' does not exist — skipping"
-    MISSING+=("$repo")
-    continue
+    info "repo exists"
+  else
+    info "repo missing — creating"
+    aws ecr create-repository \
+      --repository-name "$repo" \
+      --image-tag-mutability IMMUTABLE \
+      --image-scanning-configuration scanOnPush=true \
+      --tags Key=Service,Value="$repo" Key=ManagedBy,Value=ecr-lifecycle-script \
+      --region "$REGION" \
+      >/dev/null
+    ok "repo created"
   fi
 
+  # Step 2: put (or overwrite) the lifecycle policy.
   aws ecr put-lifecycle-policy \
     --repository-name "$repo" \
     --lifecycle-policy-text "$POLICY" \
     --region "$REGION" \
     >/dev/null
-  ok "policy applied"
+  ok "policy applied (keep 3 newest)"
 done
 
 echo ""
-if [ ${#MISSING[@]} -gt 0 ]; then
-  warn "skipped ${#MISSING[@]} missing repo(s): ${MISSING[*]}"
-  warn "Re-run this script after 'terraform apply' recreates them."
-  exit 0
-fi
-
-echo "${BOLD}${GREEN}Done — all ${#REPOS[@]} repos now have the policy.${RESET}"
+echo "${BOLD}${GREEN}Done — all ${#REPOS[@]} repos have the policy.${RESET}"
 echo ""
 echo "Verify any one with:"
 echo "  aws ecr get-lifecycle-policy --repository-name ecom-product-category --region $REGION"
+echo ""
+echo "List images per repo:"
+echo "  for r in ${REPOS[*]}; do echo \"\$r:\"; aws ecr list-images --repository-name \"\$r\" --region $REGION --query 'imageIds[*].imageTag' --output text; done"
