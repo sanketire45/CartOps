@@ -47,12 +47,6 @@ data "aws_eks_addon_version" "ebs_csi" {
   kubernetes_version = aws_eks_cluster.this.version
   most_recent        = true
 }
-data "aws_eks_addon_version" "efs_csi" {
-  addon_name         = "aws-efs-csi-driver"
-  kubernetes_version = aws_eks_cluster.this.version
-  most_recent        = true
-}
-
 
 # -----------------------------------------------------------------------------
 #  ⚡ ELECTRICITY — the VPC CNI. Installed FIRST (the node group in eks.tf has
@@ -166,41 +160,10 @@ resource "aws_iam_role_policy_attachment" "ebs_csi" {
   policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonEBSCSIDriverPolicy"
 }
 
-# ---- EFS badge (identical pattern, different SA + policy) ----
-data "aws_iam_policy_document" "efs_csi_trust" {
-  statement {
-    effect  = "Allow"
-    actions = ["sts:AssumeRoleWithWebIdentity"]
-    principals {
-      type        = "Federated"
-      identifiers = [aws_iam_openid_connect_provider.eks.arn]
-    }
-    condition {
-      test     = "StringEquals"
-      variable = "${replace(aws_iam_openid_connect_provider.eks.url, "https://", "")}:sub"
-      values   = ["system:serviceaccount:kube-system:efs-csi-controller-sa"]
-    }
-    condition {
-      test     = "StringEquals"
-      variable = "${replace(aws_iam_openid_connect_provider.eks.url, "https://", "")}:aud"
-      values   = ["sts.amazonaws.com"]
-    }
-  }
-}
-resource "aws_iam_role" "efs_csi" {
-  name               = "${var.cluster_name}-efs-csi-irsa"
-  assume_role_policy = data.aws_iam_policy_document.efs_csi_trust.json
-}
-resource "aws_iam_role_policy_attachment" "efs_csi" {
-  role       = aws_iam_role.efs_csi.name
-  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonEFSCSIDriverPolicy"
-}
-
 
 # -----------------------------------------------------------------------------
-#  📦 THE DELIVERY CREW — EBS + EFS CSI drivers. Installed AFTER nodes, each
-#  WEARING its badge via `service_account_role_arn` → allowed to make AWS disks.
-#  (These unblock storage: StatefulSet MongoDB on EBS #31, shared EFS #32.)
+#  📦 THE DELIVERY CREW — EBS CSI driver. Installed AFTER nodes,
+#  WEARING its badge via `service_account_role_arn` → allowed to make AWS EBS disks.
 # -----------------------------------------------------------------------------
 resource "aws_eks_addon" "ebs_csi" {
   cluster_name             = aws_eks_cluster.this.name
@@ -214,17 +177,6 @@ resource "aws_eks_addon" "ebs_csi" {
   depends_on = [aws_eks_node_group.this]
 }
 
-resource "aws_eks_addon" "efs_csi" {
-  cluster_name             = aws_eks_cluster.this.name
-  addon_name               = "aws-efs-csi-driver"
-  addon_version            = data.aws_eks_addon_version.efs_csi.version
-  service_account_role_arn = aws_iam_role.efs_csi.arn # 🪪 hand over the EFS badge
-
-  resolve_conflicts_on_create = "OVERWRITE"
-  resolve_conflicts_on_update = "OVERWRITE"
-
-  depends_on = [aws_eks_node_group.this]
-}
 
 
 # -----------------------------------------------------------------------------
