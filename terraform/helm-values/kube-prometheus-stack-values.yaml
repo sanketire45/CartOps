@@ -51,10 +51,10 @@ prometheus:
     resources:
       requests:
         cpu: 200m
-        memory: 1Gi
+        memory: 800Mi
       limits:
         cpu: "1"
-        memory: 2Gi
+        memory: 1.4Gi
 
     # ── Don't drop unknown labels during scrape; keep rich dimensionality
     # for our few dev services. At scale you'd use metric_relabel_configs
@@ -108,7 +108,7 @@ grafana:
       memory: 128Mi
     limits:
       cpu: 500m
-      memory: 512Mi
+      memory: 450Mi
 
 # ============================================================================
 # ALERTMANAGER — M7: Slack routing

@@ -46,7 +46,7 @@ spec:
               memory: 500Mi
               cpu: 200m
             limits:
-              memory: 1Gi
+              memory: 800Mi
               # no CPU limit — same reasoning as ES
 
   http:

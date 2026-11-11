@@ -13,8 +13,8 @@ resources:
     cpu: 100m
     memory: 192Mi
   limits:
-    cpu: 500m
-    memory: 512Mi   # memory_limiter below is set to 400Mi — stays under this
+    cpu: 250m
+    memory: 300Mi   # memory_limiter below is set to 400Mi — stays under this
 
 # ── Presets: Helm-chart shortcuts that wire up volumes + RBAC + config ───────
 presets:

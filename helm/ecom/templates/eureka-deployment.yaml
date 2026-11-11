@@ -47,7 +47,7 @@ spec:
               memory: "256Mi"
             limits:
               cpu: "300m"
-              memory: "512Mi"
+              memory: "400Mi"
           volumeMounts:
             - name: tmp
               mountPath: /tmp

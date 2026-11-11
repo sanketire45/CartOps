@@ -91,13 +91,13 @@ spec:
                   # ILM, Watcher, SQL, EQL, ML, Inference, APM, etc. —
                   # several hundred MB just to initialise before any index
                   # is served). 1GB is the realistic floor for ES 8.x.
-                  value: "-Xms1g -Xmx1g"
+                  value: "-Xms700m -Xmx700m"
               resources:
                 requests:
-                  memory: 2Gi    # heap + off-heap + JVM overhead
+                  memory: 1.4Gi    # heap + off-heap + JVM overhead
                   cpu: 500m
                 limits:
-                  memory: 2Gi
+                  memory: 1.4Gi
                   # NO CPU LIMIT — ES gets throttled unpredictably with
                   # hard CPU limits; standard ES production guidance is
                   # request-only. Memory limit == request = guaranteed QoS.
@@ -121,7 +121,7 @@ spec:
             storageClassName: gp3       # the one we created in addons.tf
             resources:
               requests:
-                storage: 10Gi
+                storage: 4Gi
 
   # Expose the HTTP service as ClusterIP (default). Access via port-forward:
   #   kubectl port-forward -n observability svc/ecom-logs-es-http 9200:9200
