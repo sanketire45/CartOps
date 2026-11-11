@@ -9,9 +9,11 @@ import io.opentelemetry.api.trace.SpanKind;
 import io.opentelemetry.api.trace.StatusCode;
 import io.opentelemetry.context.Context;
 import io.opentelemetry.context.Scope;
+import io.opentelemetry.context.propagation.TextMapGetter;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.messaging.Message;
+import org.springframework.messaging.MessageHeaders;
 import org.springframework.stereotype.Component;
 
 @Component
@@ -35,9 +37,16 @@ public class OrderEventConsumer {
         // Without this, notification-worker creates an orphan root span and the
         // trace is broken at the async boundary — you lose the full call graph.
         Context parentCtx = GlobalOpenTelemetry.getPropagators().getTextMapPropagator()
-            .extract(Context.current(), message.getHeaders(), (carrier, key) -> {
-                Object v = carrier.get(key);
-                return v != null ? v.toString() : null;
+            .extract(Context.current(), message.getHeaders(), new TextMapGetter<MessageHeaders>() {
+                @Override
+                public Iterable<String> keys(MessageHeaders carrier) {
+                    return carrier.keySet();
+                }
+                @Override
+                public String get(MessageHeaders carrier, String key) {
+                    Object v = carrier.get(key);
+                    return v != null ? v.toString() : null;
+                }
             });
 
         // CONSUMER kind signals "this span was triggered by a message from a queue"
