@@ -46,6 +46,16 @@ resource "helm_release" "ingress_nginx" {
     value = "internet-facing"
   }
 
-  timeout    = 900              # NLB provisioning 5-8 min install; deletion can hit 10+ min — 900s safe margin
+  # Disable the admission webhook for dev.
+  # The webhook installs two Jobs (admission-create + admission-patch) that pull
+  # registry.k8s.io/ingress-nginx/kube-webhook-certgen. On fresh t3.medium nodes
+  # those jobs can exceed 15 min waiting for the image pull → Helm timeout.
+  # In dev we don't need Ingress validation at admission time.
+  set {
+    name  = "controller.admissionWebhooks.enabled"
+    value = "false"
+  }
+
+  timeout    = 900              # NLB provisioning 5-8 min; keep as safety net even with webhooks off
   depends_on = [helm_release.aws_lbc] # the LB controller must exist to build the NLB
 }

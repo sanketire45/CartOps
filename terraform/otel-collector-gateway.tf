@@ -97,6 +97,11 @@ resource "helm_release" "otel_gateway" {
     file("${path.module}/helm-values/otel-gateway-values.yaml")
   ]
 
+  # otel/opentelemetry-collector-contrib is ~500MB compressed.
+  # On a fresh t3.medium node the image pull alone takes 6-10 min.
+  # The Helm default of 300s (5 min) times out before the pod ever starts.
+  timeout = 900
+
   depends_on = [
     helm_release.otel_operator,
     kubernetes_namespace.observability,
