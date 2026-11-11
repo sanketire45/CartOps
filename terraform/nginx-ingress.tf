@@ -56,6 +56,10 @@ resource "helm_release" "ingress_nginx" {
     value = "false"
   }
 
-  timeout    = 900              # NLB provisioning 5-8 min; keep as safety net even with webhooks off
+  # wait=false: the ingress-nginx pod starts quickly but its readiness probe can
+  # lag behind Helm's wait window on a cold node. The pod IS Running by the
+  # time boot.sh needs it — no subsequent step blocks on ingress-nginx readiness.
+  wait       = false
+  timeout    = 900
   depends_on = [helm_release.aws_lbc] # the LB controller must exist to build the NLB
 }

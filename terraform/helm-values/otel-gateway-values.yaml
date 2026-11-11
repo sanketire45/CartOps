@@ -18,6 +18,12 @@ extraEnvs:
       secretKeyRef:
         name: ecom-logs-es-elastic-user
         key: elastic
+        # optional=true: ECK only creates this secret after Elasticsearch boots
+        # (via ArgoCD, after Terraform Phase 3). Without optional=true the pod
+        # gets CreateContainerConfigError and loops forever until ES is ready.
+        # boot.sh waits for the secret and then restarts the deployment so the
+        # real password is loaded.
+        optional: true
 
 # ── Resources: heavier than agents — this is where processing happens ───────
 resources:
@@ -26,7 +32,7 @@ resources:
     memory: 512Mi
   limits:
     cpu: 1000m
-    memory: 1Gi   # memory_limiter set to 768Mi — stays under this
+    memory: 800Mi   # memory_limiter set to 600Mi — stays under this
 
 # ── Presets: enrichment belongs on the gateway ───────────────────────────────
 presets:
@@ -79,8 +85,8 @@ config:
 
     memory_limiter:
       check_interval: 1s
-      limit_mib: 768
-      spike_limit_mib: 128
+      limit_mib: 600       # 75% of 800Mi container limit — fires before OOMKill
+      spike_limit_mib: 100
 
     # k8sattributes injected by the preset above; defaults add:
     #   k8s.pod.name, k8s.namespace.name, k8s.node.name,

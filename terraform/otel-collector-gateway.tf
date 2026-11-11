@@ -97,9 +97,11 @@ resource "helm_release" "otel_gateway" {
     file("${path.module}/helm-values/otel-gateway-values.yaml")
   ]
 
-  # otel/opentelemetry-collector-contrib is ~500MB compressed.
-  # On a fresh t3.medium node the image pull alone takes 6-10 min.
-  # The Helm default of 300s (5 min) times out before the pod ever starts.
+  # wait=false: the gateway pod can't start until ECK creates the
+  # ecom-logs-es-elastic-user secret (after ArgoCD deploys Elasticsearch).
+  # Waiting here would always timeout. boot.sh waits for the secret separately
+  # and then restarts the gateway deployment to pick up the real password.
+  wait    = false
   timeout = 900
 
   depends_on = [

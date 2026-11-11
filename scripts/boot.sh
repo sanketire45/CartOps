@@ -184,7 +184,37 @@ while true; do
 done
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  5. wait for the ecom Ingress NLB DNS
+#  5a. wait for ECK to create the ES elastic-user secret, then restart gateway
+# ─────────────────────────────────────────────────────────────────────────────
+#  Why this step exists:
+#    The otel-gateway Helm release uses `optional: true` on the ES password
+#    secretKeyRef so it starts even before the secret exists. But it needs the
+#    real password to actually ship logs to ES. This step waits until ECK has
+#    finished bootstrapping Elasticsearch (which creates ecom-logs-es-elastic-user),
+#    then does a rollout restart so the gateway pod picks up the secret.
+# ─────────────────────────────────────────────────────────────────────────────
+step "Step 6b/7: wait for ES elastic-user secret + restart otel-gateway"
+echo "  Waiting for ECK to create ecom-logs-es-elastic-user (ES must be Running)..."
+DEADLINE=$(( $(date +%s) + 600 ))
+while true; do
+  if kubectl get secret -n observability ecom-logs-es-elastic-user >/dev/null 2>&1; then
+    ok "ecom-logs-es-elastic-user secret exists"
+    break
+  fi
+  if [ "$(date +%s)" -gt "$DEADLINE" ]; then
+    warn "Timeout waiting for ES secret. Gateway will retry automatically once ES is ready."
+    warn "Manual fix: kubectl rollout restart deployment -n observability -l app.kubernetes.io/instance=otel-gateway"
+    break
+  fi
+  echo "  still waiting for ES secret..."
+  sleep 10
+done
+kubectl rollout restart deployment -n observability \
+  -l app.kubernetes.io/instance=otel-gateway 2>/dev/null || true
+ok "otel-gateway restarted — will pick up ES password on next pod start"
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  6. wait for the ecom Ingress NLB DNS
 # ─────────────────────────────────────────────────────────────────────────────
 step "Step 7/7: wait for Ingress NLB DNS to populate (~2 min)"
 INGRESS_DNS=""
