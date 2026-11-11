@@ -89,6 +89,21 @@ ok "AWS LBs detaching"
 sleep 15
 
 # ─────────────────────────────────────────────────────────────────────────────
+#  3b. KEDA custom resources — delete BEFORE KEDA operator goes away
+# ─────────────────────────────────────────────────────────────────────────────
+# ScaledObject and TriggerAuthentication carry finalizer.keda.sh.
+# kubectl delete all --all skips custom resources, so if the KEDA operator
+# is killed first the finalizer can never be cleared → namespace hangs forever.
+step "Pre-destroy 3b/5: delete KEDA ScaledObjects + TriggerAuthentications"
+for NS in ecom observability; do
+  if kubectl get ns "$NS" &>/dev/null 2>&1; then
+    kubectl delete scaledobject --all -n "$NS" --timeout=30s 2>/dev/null || true
+    kubectl delete triggerauthentication --all -n "$NS" --timeout=30s 2>/dev/null || true
+  fi
+done
+ok "KEDA custom resources cleared"
+
+# ─────────────────────────────────────────────────────────────────────────────
 #  4. Helm releases — drop from state (avoids uninstall hook timeouts)
 # ─────────────────────────────────────────────────────────────────────────────
 step "Pre-destroy 4/5: remove Helm releases from Terraform state"
