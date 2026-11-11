@@ -171,12 +171,15 @@ config:
       tls:
         insecure_skip_verify: true
 
-    # ── Future exporters — kept commented until the backends exist. ──────────
-    #
-    # otlp/tempo:                                              # M14
-    #   endpoint: tempo.observability.svc.cluster.local:4317
-    #   tls:
-    #     insecure: true
+    # ── M14 LIVE: ship traces to Grafana Tempo ───────────────────────────────
+    # Tempo exposes OTLP gRPC on port 4317 (same protocol agents use).
+    # insecure=true: cluster-internal traffic, no TLS needed.
+    otlp/tempo:
+      endpoint: tempo.observability.svc.cluster.local:4317
+      tls:
+        insecure: true
+
+    # ── Future exporters ─────────────────────────────────────────────────────
     #
     # otlp/jaeger:                                             # M18 (optional)
     #   endpoint: jaeger-collector.observability.svc.cluster.local:4317
@@ -192,13 +195,13 @@ config:
         level: info     # bump to debug temporarily if troubleshooting
 
     pipelines:
-      # Traces: receive → limit → enrich → sample → batch → export
+      # Traces: receive → limit → enrich → sample → batch → Tempo
+      # M14 live: swapped debug for otlp/tempo.
+      # When M18 lands → [otlp/tempo, otlp/jaeger] (fan-out to BOTH).
       traces:
         receivers:  [otlp]
         processors: [memory_limiter, k8sattributes, tail_sampling, batch]
-        exporters:  [debug]
-        # When M14 lands → swap `debug` for `[otlp/tempo]`.
-        # When M18 lands → `[otlp/tempo, otlp/jaeger]` (fan-out to BOTH).
+        exporters:  [otlp/tempo]
 
       # Metrics: receive → limit → enrich → batch → export
       # NO tail_sampling — not a trace concept.

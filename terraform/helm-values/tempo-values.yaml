@@ -1,0 +1,106 @@
+# =============================================================================
+#  tempo-values.yaml — Grafana Tempo (monolithic mode) dev-tier config
+# =============================================================================
+#  Monolithic = all Tempo components (ingestor, querier, compactor, etc.)
+#  run in a SINGLE binary/pod. Simpler to operate; fine for dev + small-scale.
+#  Prod path: grafana/tempo-distributed (ingestor/querier/compactor split,
+#  horizontal scaling per component, separate failure domains).
+#
+#  Dynamic values injected via `set` blocks in tempo.tf:
+#    tempo.storage.trace.s3.bucket  → ecom-tempo-traces-<account-id>
+#    tempo.storage.trace.s3.region  → us-east-2
+#    serviceAccount.annotations     → IRSA role ARN
+# =============================================================================
+
+# ── SERVICE ACCOUNT ───────────────────────────────────────────────────────────
+# create=true: Helm creates it. The IRSA annotation is injected via `set` in
+# tempo.tf. Without the annotation, the pod uses the node IAM role — it has no
+# S3 permissions, every write fails.
+serviceAccount:
+  create: true
+  name: tempo
+
+# ── RESOURCES ─────────────────────────────────────────────────────────────────
+# Lean for dev — this cluster is memory-constrained (4 nodes × 3.3Gi).
+# Tempo's memory usage is dominated by its index (WAL + active block index).
+# 256Mi is enough for dev-scale trace volume after tail-sampling in gateway.
+# Prod: 2Gi+ request, especially if running without compaction offloading.
+resources:
+  requests:
+    cpu: 100m
+    memory: 256Mi
+  limits:
+    cpu: "1"
+    memory: 512Mi
+
+# ── PERSISTENCE ───────────────────────────────────────────────────────────────
+# The WAL (write-ahead log) and active block index live on a PVC.
+# Completed blocks are flushed to S3 and removed from local disk.
+# 2Gi is comfortable for dev; grow if compaction falls behind.
+persistence:
+  enabled: true
+  storageClassName: gp3
+  size: 2Gi
+  accessModes:
+    - ReadWriteOnce
+
+# ── TEMPO CONFIG ──────────────────────────────────────────────────────────────
+tempo:
+  # Accept OTLP over gRPC (from OTel gateway) on port 4317.
+  # Also exposes Jaeger-compatible ports for future M18 — these are disabled
+  # here to save resources; re-enable if Jaeger SDK clients need to connect.
+  receivers:
+    otlp:
+      protocols:
+        grpc:
+          endpoint: 0.0.0.0:4317
+        http:
+          endpoint: 0.0.0.0:4318
+
+  storage:
+    trace:
+      # S3 backend — bulk trace data lives here, NOT on the PVC.
+      # Bucket name and region injected via `set` blocks in tempo.tf.
+      backend: s3
+      s3:
+        # bucket and region come from set {} in tempo.tf
+        # IRSA handles auth — no access_key/secret_key here.
+        # The pod's service account annotation triggers AWS SDK's
+        # web-identity credential provider automatically.
+        insecure: false   # use HTTPS for S3 API calls
+
+      # WAL path on the PVC — in-flight spans before flush to S3.
+      wal:
+        path: /var/tempo/wal
+
+      # Local cache for recently-uploaded blocks (speeds up queries on fresh data).
+      local:
+        path: /var/tempo/blocks
+
+  # Keep traces in S3 for 720 hours (30 days) — matches the S3 lifecycle rule.
+  # After 720h, the index forgets them; S3 lifecycle purges the objects.
+  retention: 720h
+
+  # Compaction settings — runs periodically to merge small blocks into large ones
+  # (reduces S3 API calls + improves query performance).
+  compactor:
+    compaction:
+      block_retention: 720h
+
+  # Query timeout — dev is generous; tighten for prod SLAs.
+  querier:
+    frontend_worker:
+      frontend_address: ""  # monolithic: no separate frontend
+
+# ── SERVICE ───────────────────────────────────────────────────────────────────
+# Expose two ports:
+#   3100 — Tempo HTTP API (Grafana queries here via datasource)
+#   4317 — OTLP gRPC (OTel gateway pushes spans here)
+service:
+  type: ClusterIP
+  port: 3100
+
+# ── INGESTION LIMITS ──────────────────────────────────────────────────────────
+# Dev-friendly limits. Prod: raise max_bytes_per_trace and tune per-tenant.
+tempoQuery:
+  enabled: false   # Jaeger-query sidecar — not needed without M18 Jaeger
