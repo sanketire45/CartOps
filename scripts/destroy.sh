@@ -3,8 +3,8 @@
 #  scripts/destroy.sh — safe daily cluster teardown
 # =============================================================================
 #  Why this isn't just `terraform destroy`:
-#    1. StatefulSet PVCs (MySQL) are NOT in Terraform state — their EBS
-#       volumes survive terraform destroy and keep costing money.
+#    1. StatefulSet PVCs are NOT in Terraform state — their EBS volumes
+#       survive terraform destroy and keep costing money.
 #    2. ArgoCD Applications carry a finalizer that only ArgoCD itself can
 #       remove. If terraform kills ArgoCD before the apps are deleted, the
 #       Application + its child Namespaces hang in Terminating forever →
@@ -17,6 +17,12 @@
 #    5. Jenkins EC2 master is NOT in Terraform state (provisioned once,
 #       Elastic IP attached). Stop it (don't terminate) so EBS/config/IP
 #       survive for tomorrow.
+#    6. Kyverno admission webhooks intercept DELETE requests. If Kyverno pods
+#       die before resources are deleted, DELETEs time out → namespaces hang.
+#    7. ECK puts finalizer.elasticsearch.k8s.elastic.co on Elasticsearch CRs.
+#       Once the ECK operator is gone the finalizer can never be removed.
+#    8. KEDA puts finalizer.keda.sh on ScaledObject/TriggerAuthentication.
+#       Same problem — must delete before the operator is gone.
 # =============================================================================
 
 set -euo pipefail
@@ -33,23 +39,83 @@ ok()   { echo "${GREEN}  OK: $*${RESET}"; }
 warn() { echo "${YELLOW}  WARN: $*${RESET}"; }
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  1. StatefulSet PVCs — delete first to free EBS
+#  0. Kyverno webhooks — disable FIRST so they can't block any later deletes
 # ─────────────────────────────────────────────────────────────────────────────
-step "Pre-destroy 1/5: delete StatefulSet PVCs (so EBS volumes release)"
-if kubectl get pvc data-mysql-0 -n ecom &>/dev/null 2>&1; then
-  echo "  Deleting mysql-0 pod first (PVC can't delete while a pod holds it)..."
-  kubectl delete pod mysql-0 -n ecom --wait=false 2>/dev/null || true
-  echo "  Deleting data-mysql-0 PVC (triggers EBS volume cleanup)..."
-  kubectl delete pvc data-mysql-0 -n ecom --wait=true --timeout=60s || warn "PVC delete didn't complete cleanly"
-  ok "MySQL PVC + EBS volume released"
+# Kyverno's validating + mutating webhooks intercept every DELETE. If Kyverno
+# pods die mid-cleanup the webhook call times out → DELETE returns an error →
+# resources can't be removed → namespaces hang Terminating. Deleting the
+# webhook configurations tells the API server to stop calling Kyverno.
+step "Pre-destroy 0/6: remove Kyverno admission webhooks"
+kubectl delete mutatingwebhookconfiguration \
+  kyverno-policy-mutating-webhook-cfg \
+  kyverno-resource-mutating-webhook-cfg \
+  kyverno-verify-mutating-webhook-cfg \
+  --ignore-not-found 2>/dev/null || true
+kubectl delete validatingwebhookconfiguration \
+  kyverno-cleanup-validating-webhook-cfg \
+  kyverno-exception-validating-webhook-cfg \
+  kyverno-global-context-validating-webhook-cfg \
+  kyverno-policy-validating-webhook-cfg \
+  kyverno-resource-validating-webhook-cfg \
+  kyverno-ttl-validating-webhook-cfg \
+  keda-admission \
+  --ignore-not-found 2>/dev/null || true
+ok "Kyverno + KEDA admission webhooks removed"
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  1. ECK Elasticsearch CR — delete BEFORE ECK operator is gone
+# ─────────────────────────────────────────────────────────────────────────────
+# ECK puts finalizer.elasticsearch.k8s.elastic.co on its Elasticsearch CR.
+# Once the ECK operator (elastic-system) pod is gone, the finalizer can never
+# be cleared and elastic-system hangs Terminating forever.
+step "Pre-destroy 1/6: delete ECK Elasticsearch + Kibana CRs"
+if kubectl get crd elasticsearches.elasticsearch.k8s.elastic.co &>/dev/null 2>&1; then
+  kubectl delete elasticsearch --all --all-namespaces --timeout=90s 2>/dev/null || warn "Elasticsearch delete incomplete"
+  kubectl delete kibana --all --all-namespaces --timeout=30s 2>/dev/null || true
+  ok "ECK resources deleted"
 else
-  echo "  data-mysql-0 PVC not found — skipping."
+  echo "  ECK CRD not present — skipping."
 fi
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  2. ArgoCD Applications — strip finalizers + delete BEFORE ArgoCD goes away
+#  2. KEDA custom resources — delete BEFORE KEDA operator is gone
 # ─────────────────────────────────────────────────────────────────────────────
-step "Pre-destroy 2/5: delete ArgoCD Applications (prevents namespace hang)"
+# ScaledObject and TriggerAuthentication carry finalizer.keda.sh.
+# kubectl delete all skips custom resources, so if KEDA operator is killed
+# first the finalizer can never be cleared → namespace hangs Terminating.
+step "Pre-destroy 2/6: delete KEDA ScaledObjects + TriggerAuthentications"
+if kubectl get crd scaledobjects.keda.sh &>/dev/null 2>&1; then
+  kubectl delete scaledobject --all --all-namespaces --timeout=30s 2>/dev/null || true
+  kubectl delete triggerauthentication --all --all-namespaces --timeout=30s 2>/dev/null || true
+  ok "KEDA custom resources cleared"
+else
+  echo "  KEDA CRD not present — skipping."
+fi
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  3. StatefulSet PVCs — delete pods first, then PVCs to free EBS volumes
+# ─────────────────────────────────────────────────────────────────────────────
+# PVCs are NOT in Terraform state — the EBS volumes survive terraform destroy
+# and keep accruing cost. Delete StatefulSet pods first so the PVCs detach,
+# then delete the PVCs themselves.
+step "Pre-destroy 3/6: delete all StatefulSet PVCs (frees EBS)"
+# Kill StatefulSet pods so their PVCs detach
+for NS in ecom observability elastic-system; do
+  if kubectl get ns "$NS" &>/dev/null 2>&1; then
+    kubectl delete statefulset --all -n "$NS" --wait=false 2>/dev/null || true
+    kubectl delete pods --all -n "$NS" --wait=false 2>/dev/null || true
+  fi
+done
+# Short wait for pod termination so PVCs are detached
+sleep 5
+# Now delete all PVCs across all namespaces
+kubectl delete pvc --all --all-namespaces --wait=false 2>/dev/null || warn "some PVCs didn't delete cleanly"
+ok "All PVCs queued for deletion (EBS volumes releasing)"
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  4. ArgoCD Applications — strip finalizers + delete BEFORE ArgoCD goes away
+# ─────────────────────────────────────────────────────────────────────────────
+step "Pre-destroy 4/6: delete ArgoCD Applications (prevents namespace hang)"
 if kubectl get crd applications.argoproj.io &>/dev/null 2>&1; then
   APPS=$(kubectl get applications -n argocd -o name 2>/dev/null || true)
   if [ -n "$APPS" ]; then
@@ -69,14 +135,13 @@ else
 fi
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  3. Services / Ingress — detach AWS LBs WHILE the controllers are alive
+#  5. Services / Ingress — detach AWS LBs WHILE the controllers are alive
 # ─────────────────────────────────────────────────────────────────────────────
-step "Pre-destroy 3/5: delete Ingresses + LoadBalancer Services (detaches AWS NLBs)"
-echo "  Deleting all Ingress resources (nginx-ingress NLB goes away)..."
+step "Pre-destroy 5/6: delete Ingresses + LoadBalancer Services (detaches AWS ELBs)"
+echo "  Deleting all Ingress resources..."
 kubectl delete ingress --all --all-namespaces --timeout=60s 2>/dev/null || warn "some ingresses didn't delete cleanly"
 
 echo "  Deleting all LoadBalancer-type Services..."
-# Only touch Services whose type is LoadBalancer — leave ClusterIP alone
 kubectl get svc --all-namespaces -o json 2>/dev/null \
   | jq -r '.items[] | select(.spec.type=="LoadBalancer") | "-n \(.metadata.namespace) \(.metadata.name)"' 2>/dev/null \
   | while read -r args; do
@@ -84,29 +149,13 @@ kubectl get svc --all-namespaces -o json 2>/dev/null \
     done
 ok "AWS LBs detaching"
 
-# Short grace so AWS actually finishes releasing the NLBs/ALBs before we
-# kill the controllers that could still help. 15s is usually enough.
+# Grace period so AWS finishes releasing ELBs before the LB controller dies.
 sleep 15
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  3b. KEDA custom resources — delete BEFORE KEDA operator goes away
+#  6. Helm releases — drop from Terraform state (avoids uninstall hook timeouts)
 # ─────────────────────────────────────────────────────────────────────────────
-# ScaledObject and TriggerAuthentication carry finalizer.keda.sh.
-# kubectl delete all --all skips custom resources, so if the KEDA operator
-# is killed first the finalizer can never be cleared → namespace hangs forever.
-step "Pre-destroy 3b/5: delete KEDA ScaledObjects + TriggerAuthentications"
-for NS in ecom observability; do
-  if kubectl get ns "$NS" &>/dev/null 2>&1; then
-    kubectl delete scaledobject --all -n "$NS" --timeout=30s 2>/dev/null || true
-    kubectl delete triggerauthentication --all -n "$NS" --timeout=30s 2>/dev/null || true
-  fi
-done
-ok "KEDA custom resources cleared"
-
-# ─────────────────────────────────────────────────────────────────────────────
-#  4. Helm releases — drop from state (avoids uninstall hook timeouts)
-# ─────────────────────────────────────────────────────────────────────────────
-step "Pre-destroy 4/5: remove Helm releases from Terraform state"
+step "Pre-destroy 6a/6: remove Helm releases from Terraform state"
 cd "$TERRAFORM_DIR"
 HELM_RESOURCES=$(terraform state list 2>/dev/null | grep '^helm_release\.' || true)
 if [ -n "$HELM_RESOURCES" ]; then
@@ -119,19 +168,21 @@ else
   echo "  No Helm releases in state."
 fi
 
+# Also drop the OTel Instrumentation CR from state — terraform will try to
+# delete it via the K8s API after the OTel operator is gone, which races.
+# Dropping it means the CR is simply abandoned (cleaned up with the cluster).
+step "Pre-destroy 6b/6: drop OTel Instrumentation CR from Terraform state"
+terraform state rm kubernetes_manifest.ecom_java_instrumentation 2>/dev/null || true
+ok "OTel Instrumentation CR removed from state"
+
 # ─────────────────────────────────────────────────────────────────────────────
-#  4b. Namespaces — strip finalizers so terraform doesn't hang on them
+#  6c. Namespace finalizers — nuclear safety net for anything still stuck
 # ─────────────────────────────────────────────────────────────────────────────
-step "Pre-destroy 4b/5: strip namespace finalizers (safety net)"
-# After step 2/3, apps and LBs should be gone — but if anything inside the
-# namespace still carries a finalizer, the ns will hang. This is the nuclear
-# option: force-strip ns finalizers on the ones Terraform manages.
-for NS in ecom observability argocd; do
+step "Pre-destroy 6c/6: strip namespace finalizers + flush remaining resources"
+ALL_NS="ecom observability argocd elastic-system external-secrets ingress-nginx kyverno opentelemetry-operator-system sloth"
+for NS in $ALL_NS; do
   if kubectl get ns "$NS" &>/dev/null 2>&1; then
-    # Delete any stuck resources still referencing finalizers we've already
-    # addressed above (silent fail OK).
     kubectl delete all --all -n "$NS" --timeout=30s --wait=false 2>/dev/null || true
-    # If the ns is already in Terminating state, strip its finalizer.
     PHASE=$(kubectl get ns "$NS" -o jsonpath='{.status.phase}' 2>/dev/null || true)
     if [ "$PHASE" = "Terminating" ]; then
       warn "namespace $NS is stuck Terminating — stripping finalizer"
@@ -144,13 +195,13 @@ done
 ok "namespace finalizers checked"
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  5. terraform destroy
+#  7. terraform destroy
 # ─────────────────────────────────────────────────────────────────────────────
 step "Running terraform destroy"
 terraform destroy -auto-approve
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  6. Stop Jenkins EC2 (keeps EBS + Elastic IP alive at near-zero cost)
+#  8. Stop Jenkins EC2 (keeps EBS + Elastic IP alive at near-zero cost)
 # ─────────────────────────────────────────────────────────────────────────────
 step "Post-destroy: stop Jenkins EC2 master"
 STATE=$(aws ec2 describe-instances \
