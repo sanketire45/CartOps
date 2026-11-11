@@ -26,8 +26,8 @@
 #  🧪  VERIFY AFTER APPLY:
 #        kubectl get pods -n observability -l app.kubernetes.io/name=tempo
 #        # Expect: 1/1 Running
-#        kubectl port-forward -n observability svc/tempo 3100:3100
-#        curl http://localhost:3100/ready
+#        kubectl port-forward -n observability svc/tempo 3200:3200
+#        curl http://localhost:3200/ready
 #        # Expect: "ready"
 # =============================================================================
 
@@ -156,6 +156,12 @@ resource "helm_release" "tempo" {
   set {
     name  = "tempo.storage.trace.s3.region"
     value = var.aws_region
+  }
+  # Tempo uses the MinIO Go SDK for S3 — it requires an explicit endpoint.
+  # Unlike the AWS SDK, MinIO does not resolve the endpoint from region alone.
+  set {
+    name  = "tempo.storage.trace.s3.endpoint"
+    value = "s3.${var.aws_region}.amazonaws.com"
   }
   # IRSA: annotate the ServiceAccount so the pod gets an AWS identity.
   set {
