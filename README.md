@@ -255,7 +255,7 @@ CartOps/
 
 ---
 
-## 🎙️ What I can walk you through
+## What I can walk you through
 
 Because this platform is **actually running**, I can open a terminal and demonstrate — not just describe:
 
@@ -266,11 +266,9 @@ Because this platform is **actually running**, I can open a terminal and demonst
 - Grafana correlating a latency spike → trace → logs in one pane.
 - Why a pod can (or can't) reach MySQL — live NetworkPolicy + IRSA.
 
-The `Interview/` folder captures the *why* behind each decision as real interview Q&A (general, scenario, and incident/war-story style), grounded entirely in what's built here.
-
 ---
 
-## 🚀 Status
+## Status
 
 **Live** on Amazon EKS (`us-east-2`) · GitOps-managed · 6 services across the `ecom` namespace · operated daily via `apply`/`destroy` cycles that preserve stateful data.
 
