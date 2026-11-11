@@ -8,6 +8,17 @@
 #  land, ADD real exporters here and swap the pipeline target. No app change.
 # =============================================================================
 
+# ── Extra env vars — sourced from Kubernetes Secrets ─────────────────────────
+# ES_PASSWORD: ECK creates ecom-logs-es-elastic-user automatically when the
+# Elasticsearch CR is reconciled. Key "elastic" = the superuser password.
+# The gateway's elasticsearch exporter reads it as ${env:ES_PASSWORD}.
+extraEnvs:
+  - name: ES_PASSWORD
+    valueFrom:
+      secretKeyRef:
+        name: ecom-logs-es-elastic-user
+        key: elastic
+
 # ── Resources: heavier than agents — this is where processing happens ───────
 resources:
   requests:
@@ -140,15 +151,21 @@ config:
       resource_to_telemetry_conversion:
         enabled: true
 
+    # ── M10 LIVE: ship logs to Elasticsearch ─────────────────────────────────
+    # ECK names the HTTP Service <CR-name>-es-http in the same namespace.
+    # TLS: ECK self-signed CA — insecure_skip_verify for dev. Production path:
+    #   mount ecom-logs-es-http-certs-public Secret and use tls.ca_file.
+    # Auth: elastic superuser password injected as ES_PASSWORD via extraEnvs.
+    # OTel env expansion syntax: ${env:VAR} (not bare ${VAR}).
+    elasticsearch:
+      endpoints: ["https://ecom-logs-es-http.observability.svc.cluster.local:9200"]
+      logs_index: logs-ecom
+      user: elastic
+      password: ${env:ES_PASSWORD}
+      tls:
+        insecure_skip_verify: true
+
     # ── Future exporters — kept commented until the backends exist. ──────────
-    #
-    # elasticsearch:                                           # M10
-    #   endpoints: [https://elasticsearch-es-http.observability.svc.cluster.local:9200]
-    #   logs_index: ecom-logs
-    #   user: elastic
-    #   password: ${ES_PASSWORD}
-    #   tls:
-    #     insecure_skip_verify: true   # ECK self-signed cert in dev
     #
     # otlp/tempo:                                              # M14
     #   endpoint: tempo.observability.svc.cluster.local:4317
@@ -187,9 +204,9 @@ config:
         processors: [memory_limiter, k8sattributes, batch]
         exporters:  [prometheusremotewrite]
 
-      # Logs: receive → limit → enrich → batch → export
+      # Logs: receive → limit → enrich → batch → Elasticsearch
+      # M10 live: exporter swapped from debug to elasticsearch.
       logs:
         receivers:  [otlp]
         processors: [memory_limiter, k8sattributes, batch]
-        exporters:  [debug]
-        # When M10 lands → swap `debug` for `[elasticsearch]`.
+        exporters:  [elasticsearch]

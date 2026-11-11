@@ -70,6 +70,11 @@ spec:
         # Dev-mode single-node bootstrap: needed so ES doesn't wait for
         # 2+ master-eligible nodes to form a quorum.
         node.store.allow_mmap: false
+        # Explicit bootstrap seed for single-node cluster. ECK normally injects
+        # this automatically, but on a fresh PVC it can get stuck waiting for
+        # StorageCapacity objects. Setting it here unblocks ECK's reconciliation.
+        # Remove if scaling to 3+ master nodes (not needed after first election).
+        cluster.initial_master_nodes: ["ecom-logs-es-default-0"]
         # xpack.security is ENABLED by default in ECK-managed clusters.
         # Disabling would skip the elastic-user secret seeding — don't.
 
