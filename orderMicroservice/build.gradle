@@ -61,6 +61,10 @@ dependencies {
 	// Required for IRSA: AWS SDK v2 splits STS into its own module.
 	// Without it, WebIdentityTokenCredentialsProvider fails at runtime.
 	implementation 'software.amazon.awssdk:sts'
+	// M16: OTel API for W3C traceparent injection into SQS message attributes.
+	// compileOnly — the OTel Java agent (injected at runtime via JAVA_TOOL_OPTIONS)
+	// provides the full SDK implementation; we only need the API at compile time.
+	compileOnly 'io.opentelemetry:opentelemetry-api:1.42.1'
 
 }
 
