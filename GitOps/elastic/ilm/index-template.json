@@ -1,0 +1,16 @@
+{
+  "index_patterns": ["logs-ecom-*"],
+  "template": {
+    "settings": {
+      "number_of_shards": 1,
+      "number_of_replicas": 1,
+      "index.lifecycle.name": "logs-ecom-policy",
+      "index.lifecycle.rollover_alias": "logs-ecom"
+    }
+  },
+  "priority": 200,
+  "_meta": {
+    "description": "Index template for ecom application logs managed by ILM. Indices match logs-ecom-NNNNNN pattern. Write alias logs-ecom rolls over daily or at 5GB and deletes after 7 days.",
+    "managed_by": "M12"
+  }
+}
