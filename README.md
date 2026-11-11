@@ -4,7 +4,7 @@
 
 ### A production-grade, event-driven e-commerce platform on **Amazon EKS** — built the way real SRE/DevOps teams run software.
 
-*Spring Boot microservices · Terraform IaC · Jenkins CI · Argo CD GitOps · KEDA event-autoscaling · LGTM + OpenTelemetry observability*
+*Spring Boot microservices · Terraform IaC · Jenkins CI · Argo CD GitOps · KEDA event-autoscaling · OpenTelemetry-based observability*
 
 <br/>
 
@@ -28,7 +28,7 @@
 <div align="center">
   <img src="screenshots/architecture.svg" alt="CartOps — end-to-end architecture: request path, async event path, CI/CD, and observability" width="100%"/>
   <br/>
-  <sub><i>End-to-end flow — from a browser request, through the synchronous API path and the asynchronous SQS event path, to full LGTM + OpenTelemetry observability. Every box is a real component in this repo.</i></sub>
+  <sub><i>End-to-end flow — from a browser request, through the synchronous API path and the asynchronous SQS event path, to full OpenTelemetry observability (metrics, logs, traces, alerts). Every box is a real component in this repo.</i></sub>
 </div>
 
 <br/>
@@ -57,7 +57,7 @@ The guiding principle behind every decision: **solve the real production problem
 | **7** | Async publish | On a new order, `order-service` publishes an event to **Amazon SQS** (`order-events`) — authenticated by **IRSA**, no static keys |
 | **8** | Event consume | **KEDA**-scaled `notification-worker` consumes the event via `@SqsListener` and writes `notification_db` |
 | **9** | Elastic scale | KEDA polls queue depth and scales the worker **0 → 5**; HPA scales the API pods on CPU; Cluster Autoscaler adds nodes |
-| **10** | Observe | **OpenTelemetry** fans telemetry out to **Prometheus / Loki / Tempo** → **Grafana** single pane → **Alertmanager** → **Slack** |
+| **10** | Observe | **OpenTelemetry** fans telemetry out to **Prometheus** (metrics), **Tempo** (traces) and **Elasticsearch** (logs) → **Grafana** + **Kibana** → **Alertmanager** → **Slack** |
 
 Two independent paths, one platform: a **synchronous request path** (blue) for user-facing reads/writes, and an **asynchronous event path** (pink) that decouples slow/side-effecting work so the checkout never waits on a notification.
 
@@ -107,7 +107,7 @@ order-service ──SendMessage──▶ Amazon SQS: order-events ──poll─�
 | **IaC — Terraform** | EKS · managed node group · OIDC/IRSA · VPC · ECR · SQS (+DLQ) · Secrets Manager · platform Helm releases (Argo CD, ESO, Kyverno, KEDA, ingress, LBC) · remote state (**S3 + DynamoDB** lock) |
 | **Scaling & reliability** | HPA · **KEDA** (event-driven, scale-to-zero) · Cluster Autoscaler · PodDisruptionBudget · topology spread · rolling updates |
 | **Security** | IRSA · External Secrets Operator + Secrets Manager + KMS · Kyverno policies · NetworkPolicy · Falco · PSA · RBAC |
-| **Observability — LGTM + OTel** | OpenTelemetry (SDK + Collector) · Prometheus · Grafana · Loki + Fluent Bit · Tempo + Jaeger · Alertmanager → Slack |
+| **Observability — OTel-native** | OpenTelemetry (SDK + Collector) · Prometheus · Grafana · Tempo + Jaeger · Elasticsearch + Kibana · Alertmanager → Slack |
 
 ---
 
@@ -160,7 +160,7 @@ order-service ──SendMessage──▶ Amazon SQS: order-events ──poll─�
 
 Instrument **once** with OpenTelemetry; the Collector fans telemetry out to swappable backends:
 - **Metrics** → Prometheus (kube-prometheus-stack, ServiceMonitors) → Grafana
-- **Logs** → Fluent Bit (DaemonSet) → Loki (S3-backed) → Grafana
+- **Logs** → OpenTelemetry Collector → Elasticsearch → explored in Kibana
 - **Traces** → Tempo + Jaeger (dual OTel exporters) → Grafana
 
 The story is **golden signals → SLI/SLO → burn-rate alerts → runbooks**, with single-pane correlation in Grafana (metric exemplar → trace → logs by `trace_id`). Scale-out answer is known and ready: **Thanos/Mimir** for multi-cluster global query, long-term retention, and HA — with cardinality control and recording rules.
@@ -177,6 +177,59 @@ The story is **golden signals → SLI/SLO → burn-rate alerts → runbooks**, w
 - **Scripts vs Terraform split:** long-lived resources with deletion windows (**KMS keys**, the state bucket, Jenkins IAM roles) live in `scripts/` and are referenced via `data` sources — so daily `apply`/`destroy` cycles for a dev cluster never accumulate orphaned KMS keys or fight mandatory deletion timers.
 
 </details>
+
+---
+
+## 📸 See it running — live evidence
+
+> Not slideware. Every capture below is this platform **actually running** — the security-gated CI pipeline, GitOps delivery, the live storefront behind an AWS load balancer, the EKS cluster, and the full observability stack.
+
+### 🔄 CI/CD — security-gated pipeline → GitOps
+
+<table>
+<tr>
+<td width="50%" valign="top"><img src="screenshots/cicd-jenkins-security-stages.png" width="100%"/><br/><sub><b>Jenkins — security gates.</b> Every build runs Trivy (filesystem scan), OWASP Dependency-Check and a SonarQube quality gate <i>before</i> an image is ever built.</sub></td>
+<td width="50%" valign="top"><img src="screenshots/cicd-jenkins-build-push.png" width="100%"/><br/><sub><b>Jenkins — parallel build &amp; push.</b> All five services build and push to ECR in parallel, then the pipeline bumps the GitOps image tag.</sub></td>
+</tr>
+</table>
+
+<p align="center"><img src="screenshots/cd-argocd-synced.png" width="92%"/><br/><sub><b>Argo CD.</b> The <code>ecom-dev</code> app <b>Synced</b> to Git — the whole resource tree (Deployments, StatefulSet, HPAs, ExternalSecrets, Services) reconciled and self-healing.</sub></p>
+
+### 🛍️ The live storefront (through the AWS load balancer)
+
+<table>
+<tr>
+<td width="50%" valign="top"><img src="screenshots/app-products.png" width="100%"/><br/><sub><b>Products.</b> Catalogue served by the React frontend, hitting <code>product-category</code> through ingress-nginx on a real NLB hostname.</sub></td>
+<td width="50%" valign="top"><img src="screenshots/app-orders.png" width="100%"/><br/><sub><b>Orders.</b> Placing an order calls <code>order-service</code>, which then publishes an event to SQS for the notification worker.</sub></td>
+</tr>
+</table>
+
+### ☸️ The cluster
+
+<p align="center"><img src="screenshots/eks-workloads-running.png" width="92%"/><br/><sub><b>Amazon EKS.</b> Workload status in the AWS console — Pods, Deployments, ReplicaSets, StatefulSets and DaemonSets all <b>100% Running</b>.</sub></p>
+
+### 📊 Observability — metrics, logs, traces, alerts
+
+<table>
+<tr>
+<td width="50%" valign="top"><img src="screenshots/obs-grafana-golden-signals.png" width="100%"/><br/><sub><b>Golden signals (RED).</b> Request rate, error rate and p50/p95/p99 latency per service, plus JVM &amp; GC — OpenTelemetry → Prometheus → Grafana.</sub></td>
+<td width="50%" valign="top"><img src="screenshots/obs-grafana-slo-healthy.png" width="100%"/><br/><sub><b>SLO dashboard.</b> 30-day availability, SLO objective, error budget remaining and burn rate — SLO-driven, not just "graphs installed".</sub></td>
+</tr>
+<tr>
+<td width="50%" valign="top"><img src="screenshots/obs-grafana-slo-burning.png" width="100%"/><br/><sub><b>Error budget burning.</b> The same SLO panel during stress — budget going negative and burn rate spiking, exactly what trips a multi-window burn-rate alert.</sub></td>
+<td width="50%" valign="top"><img src="screenshots/obs-alertmanager-firing.png" width="100%"/><br/><sub><b>Alertmanager.</b> Burn-rate and Kubernetes alerts firing (ProductCategoryAvailability, KubeCPU/MemoryOvercommit).</sub></td>
+</tr>
+<tr>
+<td width="50%" valign="top"><img src="screenshots/obs-slack-alerts.png" width="100%"/><br/><sub><b>Alerts → Slack.</b> Those alerts delivered to <code>#ecom-alerts</code> with service, SLO, severity and summary — closing the loop to a human.</sub></td>
+<td width="50%" valign="top"><img src="screenshots/obs-tempo-traces.png" width="100%"/><br/><sub><b>Distributed tracing.</b> Grafana Tempo traces for <code>order-service</code> — W3C trace context propagated across the SQS boundary.</sub></td>
+</tr>
+<tr>
+<td width="50%" valign="top"><img src="screenshots/obs-kibana-logs-discover.png" width="100%"/><br/><sub><b>Centralised logs.</b> OpenTelemetry log pipeline into Elasticsearch, explored in Kibana — structured by pod, namespace and trace id.</sub></td>
+<td width="50%" valign="top"><img src="screenshots/obs-kibana-logs-by-namespace.png" width="100%"/><br/><sub><b>Log volume by namespace.</b> Kibana breakdown across <code>kube-system</code>, <code>argocd</code>, <code>ecom</code> and the platform namespaces.</sub></td>
+</tr>
+</table>
+
+<p align="center"><img src="screenshots/obs-grafana-dashboards.png" width="92%"/><br/><sub><b>Dashboard library.</b> Golden-signals, SLO and the full kube-prometheus-stack / Kubernetes-mixin dashboard set — all provisioned as code.</sub></p>
 
 ---
 
@@ -197,7 +250,7 @@ CartOps/
 ├── GitOps/                           # Argo CD app-of-apps (root-app → ecom-dev)
 ├── scripts/                          # KMS key, state backend, Jenkins IAM bootstrap, destroy
 ├── Interview/                        # DevOps interview Q&A grounded in this build
-└── screenshots/architecture.svg      # the diagram above
+└── screenshots/                       # architecture.svg + live-evidence screenshots
 ```
 
 ---
