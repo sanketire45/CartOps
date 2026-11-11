@@ -140,7 +140,7 @@ resource "helm_release" "tempo" {
   name       = "tempo"
   repository = "https://grafana.github.io/helm-charts"
   chart      = "tempo"
-  version    = "1.14.1"
+  version    = "1.24.4"
 
   namespace = kubernetes_namespace.observability.metadata[0].name
 
@@ -191,7 +191,7 @@ resource "kubernetes_config_map" "grafana_tempo_datasource" {
           type: tempo
           uid: tempo
           access: proxy
-          url: http://tempo.observability.svc.cluster.local:3100
+          url: http://tempo.observability.svc.cluster.local:3200
           isDefault: false
           version: 1
           jsonData:
