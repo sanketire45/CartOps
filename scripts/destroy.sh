@@ -155,8 +155,9 @@ sleep 15
 # ─────────────────────────────────────────────────────────────────────────────
 #  6. Helm releases — drop from Terraform state (avoids uninstall hook timeouts)
 # ─────────────────────────────────────────────────────────────────────────────
-step "Pre-destroy 6a/6: remove Helm releases from Terraform state"
+step "Pre-destroy 6a/6: remove Helm releases + all kubernetes_* resources from Terraform state"
 cd "$TERRAFORM_DIR"
+# Drop Helm releases (avoid uninstall hook timeouts)
 HELM_RESOURCES=$(terraform state list 2>/dev/null | grep '^helm_release\.' || true)
 if [ -n "$HELM_RESOURCES" ]; then
   echo "$HELM_RESOURCES" | while read -r res; do
@@ -166,6 +167,23 @@ if [ -n "$HELM_RESOURCES" ]; then
   ok "Helm releases dropped from state"
 else
   echo "  No Helm releases in state."
+fi
+
+# Drop ALL kubernetes_* provider resources from state.
+# Root cause of 'context deadline exceeded': Terraform destroys
+# kubernetes_namespace.* and aws_eks_node_group in parallel. The node group
+# wins (~10 min), the K8s API disappears, and the namespace destroy call
+# loses its connection. Since the EKS cluster deletion cleans up all
+# namespaces anyway, it is safe to simply abandon them in state.
+K8S_RESOURCES=$(terraform state list 2>/dev/null | grep '^kubernetes_' || true)
+if [ -n "$K8S_RESOURCES" ]; then
+  echo "$K8S_RESOURCES" | while read -r res; do
+    echo "    removing $res"
+    terraform state rm "$res" 2>/dev/null || true
+  done
+  ok "kubernetes_* resources dropped from state"
+else
+  echo "  No kubernetes_* resources in state."
 fi
 
 # Also drop the OTel Instrumentation CR from state — terraform will try to
