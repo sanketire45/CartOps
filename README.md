@@ -26,7 +26,7 @@
 <br/>
 
 <div align="center">
-  <img src="screenshots/architecture.svg" alt="CartOps — end-to-end architecture: request path, async event path, CI/CD, and observability" width="100%"/>
+  <img src="screenshots/architecture-light.svg" alt="CartOps — end-to-end architecture: request path, async event path, CI/CD, and observability" width="100%"/>
   <br/>
   <sub><i>End-to-end flow — from a browser request, through the synchronous API path and the asynchronous SQS event path, to full OpenTelemetry observability (metrics, logs, traces, alerts). Every box is a real component in this repo.</i></sub>
 </div>
